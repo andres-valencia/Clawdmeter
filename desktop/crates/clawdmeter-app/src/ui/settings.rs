@@ -683,7 +683,7 @@ impl SettingsView {
             }),
         ));
         let me = cx.entity().downgrade();
-        pane = pane.child(field(
+        pane = pane.child(field_stacked(
             t,
             "Primary button",
             "What the first button (BOOT on most boards) does. Space is Claude Code's voice push to talk.",
@@ -702,7 +702,7 @@ impl SettingsView {
             ),
         ));
         let me = cx.entity().downgrade();
-        pane = pane.child(field(
+        pane = pane.child(field_stacked(
             t,
             "Secondary button",
             "What the second button does, on boards that have one. The PWR button keeps brightness and pairing.",

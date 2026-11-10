@@ -347,7 +347,7 @@ void ble_init(void) {
     hid_dev->setPnp(0x01, 0x02E5, 0x0001, 0x0100);
     // country=33 (US ANSI). Setting this to 0 ("not supported") causes macOS
     // to launch the Keyboard Setup Assistant on first pair asking the user
-    // to identify the layout — we only ever send Space / Shift+Tab so the
+    // to identify the layout — we only send layout-independent keys (Space, Tab, Enter, Esc) so the
     // physical layout is irrelevant; advertise a known one to skip the wizard.
     hid_dev->setHidInfo(33, 0x02);
     hid_dev->setBatteryLevel(100);
