@@ -192,6 +192,8 @@ and character rules.
 | Secondary, where fitted | Send Shift+Tab to the focused window. S3 2.16: GPIO 18; C6 2.16: GPIO 10; LCD-1.54: GPIO 5. |
 | PWR, where software-controlled | Short press: brightness. Hold about 3 seconds and release: clear pairing. |
 
+The primary and secondary buttons can do something else: pick Space, Shift+Tab, Tab, Enter, Esc, cycle brightness or nothing for each under Primary button and Secondary button on the app's Device page. The PWR button keeps its brightness and pairing roles.
+
 The LCD-4 has one user button, BOOT. Its PWR key is a hardware reset.
 
 ## Settings and files

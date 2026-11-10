@@ -232,6 +232,97 @@ impl AttentionAnim {
     }
 }
 
+/// What a device button does (`button_primary`, `button_secondary`). The
+/// codes are the payload's `k1` / `k2` (`firmware/src/button_action.h`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonAction {
+    /// Nothing (a press still wakes the screen and dismisses an alert).
+    None,
+    /// Space: Claude Code's voice-mode push to talk.
+    Space,
+    /// Shift+Tab: Claude Code's mode toggle.
+    ShiftTab,
+    /// Tab.
+    Tab,
+    /// Enter.
+    Enter,
+    /// Escape.
+    Escape,
+    /// Cycle the screen brightness.
+    Brightness,
+}
+
+impl ButtonAction {
+    /// Every option, in the order the Device page shows them.
+    pub const ALL: [ButtonAction; 7] = [
+        ButtonAction::Space,
+        ButtonAction::ShiftTab,
+        ButtonAction::Tab,
+        ButtonAction::Enter,
+        ButtonAction::Escape,
+        ButtonAction::Brightness,
+        ButtonAction::None,
+    ];
+
+    /// The primary button's default.
+    pub const PRIMARY_DEFAULT: ButtonAction = ButtonAction::Space;
+    /// The secondary button's default.
+    pub const SECONDARY_DEFAULT: ButtonAction = ButtonAction::ShiftTab;
+
+    /// Parse a config value; anything unknown is `default`.
+    pub fn parse(v: &str, default: ButtonAction) -> Self {
+        match v.trim().to_ascii_lowercase().as_str() {
+            "none" | "off" => ButtonAction::None,
+            "space" => ButtonAction::Space,
+            "shift-tab" | "shift+tab" => ButtonAction::ShiftTab,
+            "tab" => ButtonAction::Tab,
+            "enter" => ButtonAction::Enter,
+            "escape" | "esc" => ButtonAction::Escape,
+            "brightness" => ButtonAction::Brightness,
+            _ => default,
+        }
+    }
+
+    /// The config-file spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ButtonAction::None => "none",
+            ButtonAction::Space => "space",
+            ButtonAction::ShiftTab => "shift-tab",
+            ButtonAction::Tab => "tab",
+            ButtonAction::Enter => "enter",
+            ButtonAction::Escape => "escape",
+            ButtonAction::Brightness => "brightness",
+        }
+    }
+
+    /// The Device page's label.
+    pub fn label(self) -> &'static str {
+        match self {
+            ButtonAction::None => "Nothing",
+            ButtonAction::Space => "Space",
+            ButtonAction::ShiftTab => "Shift+Tab",
+            ButtonAction::Tab => "Tab",
+            ButtonAction::Enter => "Enter",
+            ButtonAction::Escape => "Esc",
+            ButtonAction::Brightness => "Brightness",
+        }
+    }
+
+    /// The payload's `k1` / `k2` code.
+    pub fn code(self) -> u8 {
+        match self {
+            ButtonAction::None => 0,
+            ButtonAction::Space => 1,
+            ButtonAction::ShiftTab => 2,
+            ButtonAction::Tab => 3,
+            ButtonAction::Enter => 4,
+            ButtonAction::Escape => 5,
+            ButtonAction::Brightness => 6,
+        }
+    }
+}
+
 /// One of the device's UI colours, in the order the payload's `th` carries
 /// them (`firmware/src/theme_palette.h`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -452,6 +543,10 @@ pub struct Settings {
     pub attention_anim: AttentionAnim,
     /// Pace marker on the device's usage bars (`pm`, default off).
     pub pace_marker: bool,
+    /// What the device's primary (BOOT-side) button does (`button_primary`, `k1`).
+    pub button_primary: ButtonAction,
+    /// What the secondary button does, on boards that have one (`button_secondary`, `k2`).
+    pub button_secondary: ButtonAction,
     /// Which colours the device uses (`theme`); [`Settings::colors`] is
     /// the palette it gets as `th`, given the OS's appearance.
     pub theme: DeviceTheme,
@@ -607,6 +702,14 @@ impl Settings {
             liveliness: cfg.get("liveliness").map(parse_liveliness).unwrap_or(DEFAULT_LIVELINESS),
             attention_anim: cfg.get("attention_anim").map(AttentionAnim::parse).unwrap_or_default(),
             pace_marker: on_off(cfg.get("pace_marker"), false),
+            button_primary: cfg
+                .get("button_primary")
+                .map(|v| ButtonAction::parse(v, ButtonAction::PRIMARY_DEFAULT))
+                .unwrap_or(ButtonAction::PRIMARY_DEFAULT),
+            button_secondary: cfg
+                .get("button_secondary")
+                .map(|v| ButtonAction::parse(v, ButtonAction::SECONDARY_DEFAULT))
+                .unwrap_or(ButtonAction::SECONDARY_DEFAULT),
             theme: cfg.get("theme").map(DeviceTheme::parse).unwrap_or_default(),
             custom_colors: {
                 let mut p: Option<Palette> = None;
@@ -707,6 +810,12 @@ impl Settings {
         }
         if current.attention_anim != self.attention_anim {
             cfg.set("attention_anim", self.attention_anim.as_str());
+        }
+        if current.button_primary != self.button_primary {
+            cfg.set("button_primary", self.button_primary.as_str());
+        }
+        if current.button_secondary != self.button_secondary {
+            cfg.set("button_secondary", self.button_secondary.as_str());
         }
         if current.theme != self.theme {
             if self.theme == DeviceTheme::default() {
@@ -872,6 +981,31 @@ mod tests {
         s.apply_to(&mut cfg, &paths());
         assert_eq!(cfg.get("liveliness"), Some("1"));
         assert_eq!(Settings::from_config(&cfg, &paths(), None).liveliness, 1);
+    }
+
+    #[test]
+    fn button_actions() {
+        let s = settings("");
+        assert_eq!((s.button_primary, s.button_secondary), (ButtonAction::Space, ButtonAction::ShiftTab));
+        let s = settings("button_primary = Enter\nbutton_secondary = none\n");
+        assert_eq!((s.button_primary, s.button_secondary), (ButtonAction::Enter, ButtonAction::None));
+        let s = settings("button_primary = bogus\nbutton_secondary = bogus\n");
+        assert_eq!((s.button_primary, s.button_secondary), (ButtonAction::Space, ButtonAction::ShiftTab));
+        for a in ButtonAction::ALL {
+            assert_eq!(ButtonAction::parse(a.as_str(), ButtonAction::Space), a, "round trip");
+        }
+        let codes: Vec<u8> = ButtonAction::ALL.iter().map(|a| a.code()).collect();
+        let mut sorted = codes.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..7).collect::<Vec<u8>>(), "codes match button_action.h");
+        let mut cfg = ConfigFile::default();
+        let mut s = settings("");
+        s.apply_to(&mut cfg, &paths());
+        assert!(cfg.get("button_primary").is_none(), "the default stays out of the file");
+        s.button_primary = ButtonAction::Escape;
+        s.apply_to(&mut cfg, &paths());
+        assert_eq!(cfg.get("button_primary"), Some("escape"));
+        assert_eq!(Settings::from_config(&cfg, &paths(), None).button_primary, ButtonAction::Escape);
     }
 
     #[test]

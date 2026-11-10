@@ -146,6 +146,8 @@ pub struct Engine {
     sent_aa: Option<u16>,
     /// The pace marker the device last got (`pm`).
     sent_pm: Option<u8>,
+    /// The button actions the device last got (`k1`, `k2`).
+    sent_k: Option<(u8, u8)>,
     /// Last `th` sent.
     sent_th: Option<Palette>,
     /// The OS's light/dark mode, which picks System's or Solarized's palette.
@@ -190,6 +192,7 @@ impl Engine {
             sent_lv: None,
             sent_aa: None,
             sent_pm: None,
+            sent_k: None,
             sent_th: None,
             appearance: Appearance::default(),
             sent_tf: None,
@@ -301,6 +304,7 @@ impl Engine {
         self.sent_lv = None;
         self.sent_aa = None;
         self.sent_pm = None;
+        self.sent_k = None;
         self.sent_th = None;
         self.sent_tf = None;
         if self.active.is_some() || self.logged_out {
@@ -503,12 +507,14 @@ impl Engine {
         // A changed device setting goes out right away, like an event.
         let aa = self.settings.attention_anim.seconds();
         let pm = u8::from(self.settings.pace_marker);
+        let k = (self.settings.button_primary.code(), self.settings.button_secondary.code());
         let th = self.colors();
         let clock = clock_fields(self.settings.clock, utc(now), host.utc_offset_secs, host.prefers_12h);
         let tf = clock.as_ref().map_or(0, |cf| cf.hour_format);
         let prefs_changed = self.sent_lv != Some(self.settings.liveliness)
             || self.sent_aa != Some(aa)
             || self.sent_pm != Some(pm)
+            || self.sent_k != Some(k)
             || self.sent_th != Some(th)
             || self.sent_tf != Some(tf);
 
@@ -548,6 +554,8 @@ impl Engine {
             p.lv = Some(self.settings.liveliness);
             p.aa = Some(aa);
             p.pm = Some(pm);
+            p.k1 = Some(k.0);
+            p.k2 = Some(k.1);
             p.th = Some(th);
             (p, kind)
         };
@@ -600,6 +608,9 @@ impl Engine {
         }
         if let Some(pm) = w.payload.pm {
             self.sent_pm = Some(pm);
+        }
+        if let (Some(k1), Some(k2)) = (w.payload.k1, w.payload.k2) {
+            self.sent_k = Some((k1, k2));
         }
         if let Some(th) = w.payload.th {
             self.sent_th = Some(th);
@@ -705,7 +716,7 @@ mod tests {
         assert_eq!(w.kind, WriteKind::Poll);
         assert_eq!(
             w.payload.to_json(),
-            r#"{"s":15,"sr":60,"w":10,"wr":1440,"st":"allowed","acct":"pro","ok":true,"lv":3,"aa":120,"pm":0,"th":"0000001f1f1efaf9f5b0aea5d97757788c5dd97757c0392b2a2a28d97757141413"}"#
+            r#"{"s":15,"sr":60,"w":10,"wr":1440,"st":"allowed","acct":"pro","ok":true,"lv":3,"aa":120,"pm":0,"k1":1,"k2":2,"th":"0000001f1f1efaf9f5b0aea5d97757788c5dd97757c0392b2a2a28d97757141413"}"#
         );
         assert!(write(&mut e, T0 + 1).is_none());
     }
@@ -727,7 +738,7 @@ mod tests {
         let w = write(&mut e, T0).unwrap();
         assert_eq!(
             w.payload.to_json(),
-            r#"{"s":0,"sr":-1,"w":48,"wr":1440,"st":"allowed","acct":"week","ok":true,"lv":3,"aa":120,"pm":0,"th":"0000001f1f1efaf9f5b0aea5d97757788c5dd97757c0392b2a2a28d97757141413"}"#
+            r#"{"s":0,"sr":-1,"w":48,"wr":1440,"st":"allowed","acct":"week","ok":true,"lv":3,"aa":120,"pm":0,"k1":1,"k2":2,"th":"0000001f1f1efaf9f5b0aea5d97757788c5dd97757c0392b2a2a28d97757141413"}"#
         );
         // An account with the limit still wakes at its session reset.
         e.on_poll_results(T0 + 200, vec![(dir.clone(), Ok(reading(5)))]);
@@ -746,7 +757,7 @@ mod tests {
         assert_eq!(hb.kind, WriteKind::Heartbeat);
         assert_eq!(
             hb.payload.to_json(),
-            r#"{"s":15,"sr":55,"w":10,"wr":1435,"st":"allowed","acct":"pro","c":1,"ok":true,"rp":1,"lv":3,"aa":120,"pm":0,"th":"0000001f1f1efaf9f5b0aea5d97757788c5dd97757c0392b2a2a28d97757141413"}"#
+            r#"{"s":15,"sr":55,"w":10,"wr":1435,"st":"allowed","acct":"pro","c":1,"ok":true,"rp":1,"lv":3,"aa":120,"pm":0,"k1":1,"k2":2,"th":"0000001f1f1efaf9f5b0aea5d97757788c5dd97757c0392b2a2a28d97757141413"}"#
         );
         // Three misses: stale, heartbeats stop so the device's freshness lapses.
         for i in 1..=3 {
@@ -1285,6 +1296,20 @@ mod tests {
         assert!(write(&mut e, T0 + 3).is_none());
         e.on_connected();
         assert_eq!(write(&mut e, T0 + 4).unwrap().payload.aa, Some(0), "resent on a reconnect");
+    }
+
+    #[test]
+    fn button_actions_go_out_with_the_data_and_when_they_change() {
+        let mut e = Engine::new(settings(""));
+        e.on_poll_results(T0, vec![(PathBuf::from("/h/.claude"), Ok(reading(15)))]);
+        let w = write(&mut e, T0).unwrap();
+        assert_eq!((w.payload.k1, w.payload.k2), (Some(1), Some(2)), "every data payload carries them");
+        assert!(write(&mut e, T0 + 1).is_none(), "nothing new");
+        e.update_settings(settings("button_secondary = enter\n"));
+        let w = write(&mut e, T0 + 2).expect("a new setting is sent right away");
+        assert_eq!((w.kind, w.payload.k1, w.payload.k2), (WriteKind::Event, Some(1), Some(4)));
+        e.on_connected();
+        assert_eq!(write(&mut e, T0 + 4).unwrap().payload.k2, Some(4), "resent on a reconnect");
     }
 
     #[test]

@@ -72,7 +72,9 @@ is faked behind `FlashHardware`.
   this computer via rodio, ALSA on Linux), `clock`, `liveliness` (1–5,
   default 3: the Device page's Animation silliness slider, sent as `lv`),
   `attention_anim` (`off`/`10s`/`30s`/`2m`, default `2m`, sent as `aa`
-  seconds), `pace_marker` (default off, sent as `pm`), `theme` (`system`, the
+  seconds), `pace_marker` (default off, sent as `pm`), `button_primary` (default `space`)
+  and `button_secondary` (default `shift-tab`; `none`, `space`, `shift-tab`,
+  `tab`, `enter`, `escape`, `brightness`; sent as `k1`/`k2`), `theme` (`system`, the
   default, or `solarized`: the OS-following themes in `themes::FOLLOWING`; a
   preset id from `themes::PRESETS`; or `custom`; the old default
   `clawd` and unknown values read as `system`) and `color_<token>`

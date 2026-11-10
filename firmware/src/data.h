@@ -39,6 +39,8 @@ struct UsageData {
     int8_t   liveliness;     // `lv` 1-5 (clamped); -1 = absent (keep the saved level)
     int16_t  attn_anim_s;    // `aa` attention animation, seconds 0-120 (0 = off); -1 = absent
     int8_t   pace_marker;    // `pm` 1 = pace marker on the usage bars, 0 = off; -1 = absent
+    int8_t   btn_primary;    // `k1` button action code (button_action.h); -1 = absent
+    int8_t   btn_secondary;  // `k2` the same for the secondary button; -1 = absent
     bool     has_theme;      // `th` present and well-formed
     uint32_t theme[TH_COUNT];// `th` the palette, 0xRRGGBB per token (theme_palette.h)
     bool ok;                 // data parse succeeded

@@ -95,7 +95,8 @@ The app writes one complete JSON object per write to RX
   sequence), `n` (active sessions). `rp:1` marks the usage numbers as a replay
   (heartbeats and writes between polls): the rate math and reset detector skip
   them, but a new `es` in the same write still fires.
-- Device settings, on every data payload: `lv` (liveliness 1–5), `aa`
+- Device settings, on every data payload: `k1`/`k2` (what the primary and
+  secondary buttons do, `button_action.h`), `lv` (liveliness 1–5), `aa`
   (attention animation seconds: 120, 30, 10, 0 = off; only his animation,
   not the alert), `pm` (pace marker on the usage bars, `pace.h`) and `th`
   (the palette, 11 hex colours run together, `theme_palette.h`). The device

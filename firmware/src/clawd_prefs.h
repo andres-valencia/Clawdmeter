@@ -5,6 +5,7 @@
 //   liveliness       `lv`  1 No-nonsense .. 5 All-nonsense (clawd_policy.h)
 //   attention anim   `aa`  seconds he points and waves for an alert; 0 = off
 //   pace marker      `pm`  1 = pace marker on the usage bars (pace.h)
+//   button actions   `k1` / `k2`  what the primary / secondary button does (button_action.h)
 //   palette          `th`  the UI colours (theme_palette.h)
 #include <stdint.h>
 #include "theme_palette.h"
@@ -17,4 +18,7 @@ void attn_anim_set(int seconds);      // apply; saved only when it changes
 int  attn_anim_get(void);
 void pace_marker_set(bool on);      // apply; saved only when it changes
 bool pace_marker_get(void);
+void button_actions_set(int primary, int secondary);   // apply; saved only when it changes
+int  button_action_primary(void);
+int  button_action_secondary(void);
 void theme_set(const uint32_t p[TH_COUNT]);   // repaint live; saved only when it changes

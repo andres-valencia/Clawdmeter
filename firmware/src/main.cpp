@@ -26,6 +26,7 @@
 #include "hal/display_hal.h"
 #include "hal/touch_hal.h"
 #include "hal/input_hal.h"
+#include "button_action.h"
 #include "hal/power_hal.h"
 #include "hal/imu_hal.h"
 #include "hal/sound_hal.h"
@@ -377,6 +378,14 @@ static void touch_pair_tick(void) {
     }
 }
 
+// Run a button's configured action on press. A key action is held until the
+// button is released (`*typed` remembers it); brightness fires once.
+static void button_press(int action, bool* typed) {
+    uint8_t key, mod;
+    if (button_action_key(action, &key, &mod)) { ble_keyboard_press(key, mod); *typed = true; }
+    else if (action == BTN_ACT_BRIGHTNESS)      brightness_cycle();
+}
+
 void loop() {
     idle_tick();
     lv_timer_handler();
@@ -395,8 +404,10 @@ void loop() {
     if (!idle_is_asleep()) display_hal_tick();
 
     // ---- Physical buttons ----
-    //   PRIMARY   → HID Space  (Claude Code voice-mode PTT)
-    //   SECONDARY → HID Shift+Tab  (mode toggle; only if the board has one)
+    //   PRIMARY   → its configured action (`k1`; default HID Space, Claude
+    //               Code voice-mode PTT)
+    //   SECONDARY → its configured action (`k2`; default HID Shift+Tab; only
+    //               if the board has one)
     //   PWR       → cycle brightness; hold ~3s + release: pairing mode
     // Any press also tells the director you're here (wakes the screensaver).
     // First press from sleep is consumed as a wake-only event by
@@ -406,6 +417,7 @@ void loop() {
     {
         static bool primary_was = false;
         static bool primary_wake_swallowed = false;
+        static bool primary_typed = false;
         bool primary_now = input_hal_is_held(INPUT_BTN_PRIMARY);
         if (primary_now != primary_was) {
             if (primary_now) {
@@ -413,10 +425,10 @@ void loop() {
                 // No touchscreen: BOOT dismisses an active alert first and is
                 // not a push-to-talk press then.
                 else if (director_button(true)) primary_wake_swallowed = true;
-                else { ble_keyboard_press(0x2C, 0); }                     // HID Space, no mods
+                else button_press(button_action_primary(), &primary_typed);
             } else {
                 if (primary_wake_swallowed) primary_wake_swallowed = false;
-                else                        ble_keyboard_release();
+                else if (primary_typed)     { ble_keyboard_release(); primary_typed = false; }
             }
             primary_was = primary_now;
         }
@@ -424,14 +436,15 @@ void loop() {
         if (board_caps().button_count >= 2) {
             static bool secondary_was = false;
             static bool secondary_wake_swallowed = false;
+            static bool secondary_typed = false;
             bool secondary_now = input_hal_is_held(INPUT_BTN_SECONDARY);
             if (secondary_now != secondary_was) {
                 if (secondary_now) {
                     if (idle_consume_wake_press()) secondary_wake_swallowed = true;
-                    else { ble_keyboard_press(0x2B, 0x02); director_button(false); }  // HID Tab + LEFT_SHIFT
+                    else { button_press(button_action_secondary(), &secondary_typed); director_button(false); }
                 } else {
                     if (secondary_wake_swallowed) secondary_wake_swallowed = false;
-                    else                          ble_keyboard_release();
+                    else if (secondary_typed)     { ble_keyboard_release(); secondary_typed = false; }
                 }
                 secondary_was = secondary_now;
             }
@@ -498,6 +511,9 @@ void loop() {
                 sound_hal_chime();
             }
             if (usage.pace_marker >= 0) pace_marker_set(usage.pace_marker != 0);
+            if (usage.btn_primary >= 0 || usage.btn_secondary >= 0)
+                button_actions_set(usage.btn_primary >= 0 ? usage.btn_primary : button_action_primary(),
+                                   usage.btn_secondary >= 0 ? usage.btn_secondary : button_action_secondary());
             if (usage.has_theme) theme_set(usage.theme);
             ui_update(&usage);
             // A prompt (or you're back after a gap): you're at the computer,

@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use clawdmeter_core::autostart::{self, LaunchMode};
 use clawdmeter_core::config::{
-    parse_rgb, AlertOn, AttentionAnim, ClockMode, ColorToken, ConfigFile, DeviceTheme, Palette, LIVELINESS_MAX,
+    parse_rgb, AlertOn, AttentionAnim, ButtonAction, ClockMode, ColorToken, ConfigFile, DeviceTheme, Palette,
+    LIVELINESS_MAX,
 };
 use clawdmeter_core::platform::{Appearance, AppearanceWatch};
 use clawdmeter_core::themes::{FollowTheme, FOLLOWING, PRESETS};
@@ -680,6 +681,44 @@ impl SettingsView {
                     cx.notify();
                 });
             }),
+        ));
+        let me = cx.entity().downgrade();
+        pane = pane.child(field(
+            t,
+            "Primary button",
+            "What the first button (BOOT on most boards) does. Space is Claude Code's voice push to talk.",
+            segmented(
+                t,
+                "button-primary",
+                &ButtonAction::ALL.map(|a| (a, a.label())),
+                &self.settings.button_primary,
+                true,
+                move |a, _, cx| {
+                    let _ = me.update(cx, |v, cx| {
+                        v.save(|s, _| s.button_primary = a);
+                        cx.notify();
+                    });
+                },
+            ),
+        ));
+        let me = cx.entity().downgrade();
+        pane = pane.child(field(
+            t,
+            "Secondary button",
+            "What the second button does, on boards that have one. The PWR button keeps brightness and pairing.",
+            segmented(
+                t,
+                "button-secondary",
+                &ButtonAction::ALL.map(|a| (a, a.label())),
+                &self.settings.button_secondary,
+                true,
+                move |a, _, cx| {
+                    let _ = me.update(cx, |v, cx| {
+                        v.save(|s, _| s.button_secondary = a);
+                        cx.notify();
+                    });
+                },
+            ),
         ));
         pane = pane.child(self.colors_field(t, cx));
         let (me1, me2) = (cx.entity().downgrade(), cx.entity().downgrade());
@@ -1884,6 +1923,10 @@ mod tests {
         assert!(std::fs::read_to_string(&paths.config_file).unwrap().contains("attention_anim = 30s"));
         click(cx, "pace-marker");
         assert!(std::fs::read_to_string(&paths.config_file).unwrap().contains("pace_marker = on"));
+        click(cx, "button-primary-3"); // Enter
+        assert!(std::fs::read_to_string(&paths.config_file).unwrap().contains("button_primary = enter"));
+        click(cx, "button-secondary-6"); // Nothing
+        assert!(std::fs::read_to_string(&paths.config_file).unwrap().contains("button_secondary = none"));
         // A preset is one click; Custom opens the per-colour editor, starting
         // from the theme on screen. System theme comes first; Solarized sits
         // just before Solarized Dark and Light.

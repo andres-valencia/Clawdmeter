@@ -2,7 +2,7 @@
 //!
 //! Keys match `payload_parse()` in `firmware/src/payload.cpp`, in the order
 //! the old daemons wrote them, plus the additive fast-clock fields `a`, `e`,
-//! `es`, `n`, `rp` and the device settings `lv`, `aa`, `pm` and `th`
+//! `es`, `n`, `rp` and the device settings `lv`, `aa`, `pm`, `k1`, `k2` and `th`
 //! (old firmware ignores unknown keys).
 
 use chrono::{DateTime, Datelike, Months, TimeZone, Utc};
@@ -94,6 +94,13 @@ pub struct Payload {
     /// value it got.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pm: Option<u8>,
+    /// What the primary button does ([`crate::config::ButtonAction::code`]).
+    /// The device keeps the last value it got.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub k1: Option<u8>,
+    /// What the secondary button does, like `k1`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub k2: Option<u8>,
     /// The device's colours: 11 six-digit hex colours run together
     /// ([`crate::config::Palette::to_hex`]). The device keeps the last value
     /// it got.
@@ -104,7 +111,7 @@ pub struct Payload {
 /// Every key [`Payload`] can emit, in serialization order.
 pub const PAYLOAD_KEYS: &[&str] = &[
     "s", "sr", "w", "wr", "st", "acct", "tp", "pd", "rd", "t", "tf", "c", "ok", "b", "m", "x", "a", "e", "es", "n",
-    "rp", "lv", "aa", "pm", "th",
+    "rp", "lv", "aa", "pm", "k1", "k2", "th",
 ];
 /// The fast-clock keys added in v0.4 (old firmware ignores them).
 pub const ADDITIVE_KEYS: &[&str] = &["a", "e", "es", "n", "rp"];
@@ -519,6 +526,8 @@ mod tests {
             lv: Some(3),
             aa: Some(120),
             pm: Some(1),
+            k1: Some(1),
+            k2: Some(2),
             th: Some(Palette::default()),
         };
         let v: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&pl.to_json()).unwrap();

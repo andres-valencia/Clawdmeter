@@ -1,4 +1,5 @@
 #include "payload.h"
+#include "button_action.h"
 #include <ArduinoJson.h>
 #include <string.h>
 
@@ -83,6 +84,10 @@ bool payload_parse(const char* json, UsageData* out, const char** err) {
 
     JsonVariant pm = doc["pm"];
     d.pace_marker = pm.isNull() ? -1 : (int8_t)((pm | 0) ? 1 : 0);
+    JsonVariant k1 = doc["k1"];
+    d.btn_primary = k1.isNull() ? -1 : (int8_t)button_action_clamp(k1 | 0, BTN_ACT_PRIMARY_DEFAULT);
+    JsonVariant k2 = doc["k2"];
+    d.btn_secondary = k2.isNull() ? -1 : (int8_t)button_action_clamp(k2 | 0, BTN_ACT_SECONDARY_DEFAULT);
     d.has_theme = theme_parse_hex(doc["th"] | "", d.theme);
 
     d.ok = doc["ok"] | false;

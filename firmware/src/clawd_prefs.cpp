@@ -6,9 +6,13 @@
 #include "clawd_anim.h"
 #include "mascot.h"
 #include "performer.h"
+#include "button_action.h"
 #include "hal/board_caps.h"
 #include <Preferences.h>
 #include <Arduino.h>
+
+static int btn_primary   = BTN_ACT_PRIMARY_DEFAULT;
+static int btn_secondary = BTN_ACT_SECONDARY_DEFAULT;
 
 void clawd_prefs_init(void) {
     Preferences prefs;
@@ -16,6 +20,8 @@ void clawd_prefs_init(void) {
     const int lively = prefs.getUChar("lively", CLAWD_LIVELINESS_DEFAULT);
     const int attn = prefs.getUChar("attn_anim", CLAWD_ATTN_ANIM_DEFAULT_S);
     const bool pace = prefs.getUChar("pace_mark", 0) != 0;
+    btn_primary   = button_action_clamp(prefs.getUChar("btn_pri", BTN_ACT_PRIMARY_DEFAULT), BTN_ACT_PRIMARY_DEFAULT);
+    btn_secondary = button_action_clamp(prefs.getUChar("btn_sec", BTN_ACT_SECONDARY_DEFAULT), BTN_ACT_SECONDARY_DEFAULT);
     prefs.end();
     director_set_liveliness(clawd_liveliness_clamp(lively));
     director_set_attn_anim(clawd_attn_anim_clamp(attn));
@@ -78,6 +84,24 @@ void pace_marker_set(bool on) {
 }
 
 bool pace_marker_get(void) { return pace_marker; }
+
+void button_actions_set(int primary, int secondary) {
+    primary   = button_action_clamp(primary, BTN_ACT_PRIMARY_DEFAULT);
+    secondary = button_action_clamp(secondary, BTN_ACT_SECONDARY_DEFAULT);
+    if (primary != btn_primary) {
+        btn_primary = primary;
+        save("btn_pri", (uint8_t)primary);
+        Serial.printf("Primary button action: %d\n", primary);
+    }
+    if (secondary != btn_secondary) {
+        btn_secondary = secondary;
+        save("btn_sec", (uint8_t)secondary);
+        Serial.printf("Secondary button action: %d\n", secondary);
+    }
+}
+
+int button_action_primary(void)   { return btn_primary; }
+int button_action_secondary(void) { return btn_secondary; }
 
 void theme_set(const uint32_t p[TH_COUNT]) {
     if (board_caps().mono_panel) return;   // 1-bit: the default palette only

@@ -141,6 +141,19 @@ static void test_pace_marker(void) {
     TEST_ASSERT_EQUAL_INT(1, d.pace_marker);
 }
 
+static void test_button_actions(void) {
+    UsageData d;
+    TEST_ASSERT_TRUE(payload_parse("{\"ok\":true}", &d, nullptr));
+    TEST_ASSERT_EQUAL_INT(-1, d.btn_primary);      // absent: keep the saved action
+    TEST_ASSERT_EQUAL_INT(-1, d.btn_secondary);
+    TEST_ASSERT_TRUE(payload_parse("{\"k1\":4,\"k2\":0}", &d, nullptr));
+    TEST_ASSERT_EQUAL_INT(4, d.btn_primary);
+    TEST_ASSERT_EQUAL_INT(0, d.btn_secondary);
+    TEST_ASSERT_TRUE(payload_parse("{\"k1\":99,\"k2\":-3}", &d, nullptr));
+    TEST_ASSERT_EQUAL_INT(1, d.btn_primary);       // unknown: that button's default
+    TEST_ASSERT_EQUAL_INT(2, d.btn_secondary);
+}
+
 static void test_theme(void) {
     UsageData d;
     TEST_ASSERT_TRUE(payload_parse("{\"ok\":true}", &d, nullptr));
@@ -187,6 +200,7 @@ int main(void) {
     RUN_TEST(test_liveliness);
     RUN_TEST(test_attention_animation);
     RUN_TEST(test_pace_marker);
+    RUN_TEST(test_button_actions);
     RUN_TEST(test_theme);
     RUN_TEST(test_long_strings_truncate);
     return UNITY_END();
