@@ -1,0 +1,72 @@
+name: Fork build
+
+# This fork's own build: the Windows app only. It runs on a push to a feat/
+# branch that touches the app, or by hand (Actions → Fork build → Run
+# workflow, once this file is on the default branch).
+# The upstream workflows (firmware.yml, desktop.yml, release.yml and the
+# claude-* ones) stay in the tree unchanged so merges from upstream stay
+# clean, and are left disabled in this fork's settings.
+#
+# The firmware isn't built here: `pio run -d firmware -e waveshare_amoled_216`
+# and tools/ci/merge_firmware.py run locally (WSL). The app can't be built
+# there, since GPUI's Windows backend needs the Windows shader compiler.
+#
+# Output: the artifact `clawdmeter-windows`, holding clawdmeter.exe.
+
+on:
+  push:
+    branches: ["feat/**"]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/fork-build.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version the app reports (no leading v)
+        required: true
+        default: 2.3.3-accounts.1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CLAWDMETER_VERSION: ${{ inputs.version || '2.3.3-accounts.1' }}
+
+jobs:
+  windows:
+    name: Windows app
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # The toolchain from desktop/rust-toolchain.toml, plus the target.
+      - name: Rust toolchain
+        shell: bash
+        working-directory: desktop
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: desktop
+          key: fork-windows
+      - name: Core and BLE tests
+        shell: bash
+        working-directory: desktop
+        run: cargo test --locked -p clawdmeter-core -p clawdmeter-ble
+      - name: cargo build --release
+        shell: bash
+        working-directory: desktop
+        run: cargo build --release --locked -p clawdmeter-app --target x86_64-pc-windows-msvc
+      - name: Run the executable
+        shell: bash
+        run: desktop/target/x86_64-pc-windows-msvc/release/clawdmeter.exe --version
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clawdmeter-windows
+          path: desktop/target/x86_64-pc-windows-msvc/release/clawdmeter.exe
+          if-no-files-found: error
