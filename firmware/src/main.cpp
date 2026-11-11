@@ -22,6 +22,7 @@
 #include "clawd_prefs.h"
 #include "perf.h"
 #include "pair_hold.h"
+#include "accounts.h"
 
 #include "hal/board_caps.h"
 #include "hal/display_hal.h"
@@ -32,7 +33,10 @@
 #include "hal/sound_hal.h"
 #include "hal/board_info_hal.h"
 
-static UsageData usage = {};
+static UsageData usage = {};       // what the meters show
+static UsageData incoming = {};    // the last ok payload as the app sent it
+static uint32_t  view_told_ms = 0; // when the app was last told the account chosen here
+#define VIEW_RETELL_MS 5000        // repeat it this often while the app shows another
 
 // ---- LVGL draw buffers (partial render mode) ----
 // PSRAM-equipped boards (S3) can comfortably hold larger strips. PSRAM-free
@@ -120,6 +124,28 @@ static bool parse_json(const char* json, UsageData* out) {
         Serial.printf("JSON parse error: %s\n", err ? err : "?");
         return false;
     }
+    return true;
+}
+
+// The account button: with several accounts, show the next one from the
+// numbers kept for it (accounts.h) and tell the app, which then sends that
+// account as its main one. False when the app has only one account: the
+// button is push-to-talk then.
+static bool switch_account(void) {
+    if (accounts_count() < 2) return false;
+    const int idx = accounts_next();
+    if (idx < 0) return true;      // nothing else known yet; still not a key press
+    account_view_save(idx);
+    if (incoming.valid) {
+        UsageData shown = incoming;
+        accounts_apply_view(&shown);
+        shown.replay = true;       // drawn from kept numbers, not a new poll
+        usage = shown;
+        ui_show_account(&usage);
+    }
+    view_told_ms = millis();
+    ble_send_view(idx);
+    Serial.printf("[%lu] account button: showing account %d\n", (unsigned long)millis(), idx);
     return true;
 }
 
@@ -306,6 +332,7 @@ void setup() {
     ui_update_battery(power_hal_battery_pct(), power_hal_is_charging(), power_hal_is_vbus_in());
     director_init();    // rooms + beats; boots on the meters (home)
     clawd_prefs_init();  // the saved device settings, before the app says otherwise
+    accounts_set_view(account_view_load());   // the account last chosen with the button
 
     Serial.printf("Dashboard ready (%s, %dx%d) %lu ms after boot, waiting for data on BLE...\n",
         board_caps().name, W, H, (unsigned long)millis());
@@ -403,7 +430,8 @@ void loop() {
     if (!idle_is_asleep()) display_hal_tick();
 
     // ---- Physical buttons ----
-    //   PRIMARY   → HID Space  (Claude Code voice-mode PTT)
+    //   PRIMARY   → HID Space  (Claude Code voice-mode PTT); with several
+    //               accounts it switches the account shown instead
     //   SECONDARY → HID Shift+Tab  (mode toggle; only if the board has one)
     //   PWR       → cycle brightness; hold ~3s + release: pairing mode
     // Any press also tells the director you're here (wakes the screensaver).
@@ -421,6 +449,7 @@ void loop() {
                 // No touchscreen: BOOT dismisses an active alert first and is
                 // not a push-to-talk press then.
                 else if (director_button(true)) primary_wake_swallowed = true;
+                else if (switch_account()) primary_wake_swallowed = true;
                 else { ble_keyboard_press(0x2C, 0); }                     // HID Space, no mods
             } else {
                 if (primary_wake_swallowed) primary_wake_swallowed = false;
@@ -481,7 +510,19 @@ void loop() {
     check_serial_cmd();
 
     if (ble_has_data()) {
-        if (parse_json(ble_get_data(), &usage)) {
+        UsageData parsed = {};
+        if (parse_json(ble_get_data(), &parsed)) {
+            // Several accounts: keep them all, and show the one chosen with
+            // the account button even while the app's numbers are another's
+            // (then from the kept numbers, as a replay). See accounts.h.
+            accounts_ingest(&parsed);
+            if (parsed.ok) incoming = parsed;
+            usage = parsed;
+            accounts_apply_view(&usage);
+            if (accounts_app_behind() && millis() - view_told_ms >= VIEW_RETELL_MS) {
+                view_told_ms = millis();
+                ble_send_view(accounts_view());
+            }
             // Fast + slow clock bookkeeping: rate sample (replays skipped),
             // hook activity lift, event dedupe. See signals.h.
             const SignalsUpdate sig = signals_ingest(&usage);

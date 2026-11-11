@@ -13,7 +13,7 @@ use crate::backoff::SavedBlock;
 use crate::cadence::{heartbeat_due, AccountClock, Cadence, PollReason, Scheduler};
 use crate::config::{Palette, Settings};
 use crate::events::{Activity, HookEvent, Signal};
-use crate::payload::{clock_fields, Payload};
+use crate::payload::{clock_fields, OtherAccount, Payload};
 use crate::platform::Appearance;
 use crate::probe::{self, Plan as ProbePlan, Source};
 use crate::rate::{Mood, RateTracker};
@@ -159,6 +159,11 @@ pub struct Engine {
     claude_found: bool,
     /// A new alert should chime on this computer (`desktop_chime`).
     desktop_chime_due: bool,
+    /// The account the user chose on the device. It stays the shown one,
+    /// whatever the selector says, until they choose another.
+    pinned: Option<PathBuf>,
+    /// The shown account or the labels changed with no poll: write them.
+    view_dirty: bool,
 }
 
 fn utc(now: i64) -> DateTime<Utc> {
@@ -197,6 +202,8 @@ impl Engine {
             unattributed_activity: None,
             claude_found: true,
             desktop_chime_due: false,
+            pinned: None,
+            view_dirty: false,
         }
     }
 
@@ -225,6 +232,13 @@ impl Engine {
         // A newly added account has never been polled, so it is due at once.
         if settings.config_dirs != self.settings.config_dirs {
             self.accounts.retain(|k, _| settings.config_dirs.contains(k));
+            if self.pinned.as_ref().is_some_and(|p| !settings.config_dirs.contains(p)) {
+                self.pinned = None;
+            }
+            self.view_dirty = true;
+        }
+        if settings.account_labels != self.settings.account_labels {
+            self.view_dirty = true;
         }
         self.settings = settings;
     }
@@ -284,6 +298,32 @@ impl Engine {
     /// The device says the user dismissed the alert there (or it timed out).
     pub fn on_device_dismissed(&mut self) {
         self.attention.dismissed();
+    }
+
+    /// The user chose account `idx` (its `config_dirs` position) on the
+    /// device. It stays the shown account, whatever the selector says, until
+    /// they choose another. An index that names no account is ignored.
+    pub fn on_device_view(&mut self, idx: usize) {
+        let Some(dir) = self.settings.config_dirs.get(idx).cloned() else { return };
+        if self.pinned.as_ref() == Some(&dir) {
+            return;
+        }
+        self.pinned = Some(dir);
+        self.show_pinned();
+    }
+
+    /// Make the pinned account the shown one, once it has a reading.
+    fn show_pinned(&mut self) {
+        let Some(p) = self.pinned.clone() else { return };
+        let has_reading = self.accounts.get(&p).is_some_and(|a| a.last.is_some());
+        if !has_reading || self.active.as_ref() == Some(&p) {
+            return;
+        }
+        log::info!("active plan: {} (chosen on the device)", p.display());
+        self.active = Some(p);
+        // Another account's numbers: neither a rise nor a drop of the last one's.
+        self.rate = RateTracker::default();
+        self.view_dirty = true;
     }
 
     /// The device (REQ notify) or the user asked for fresh numbers. Accounts
@@ -451,6 +491,14 @@ impl Engine {
             self.accounts.iter().filter_map(|(k, a)| a.last.as_ref().map(|r| (k.clone(), r.session_pct()))).collect();
         let prev_active = self.active.clone();
         self.active = self.selector.choose(&sessions);
+        // An account chosen on the device stays shown once it has a reading.
+        let pin = self.pinned.clone().filter(|p| self.accounts.get(p).is_some_and(|a| a.last.is_some()));
+        if let Some(p) = pin {
+            if prev_active.as_ref() != Some(&p) {
+                self.rate = RateTracker::default();
+            }
+            self.active = Some(p);
+        }
         if self.active != prev_active && self.settings.config_dirs.len() > 1 {
             if let Some(a) = &self.active {
                 log::info!("active plan: {}", a.display());
@@ -524,7 +572,7 @@ impl Engine {
                 WriteKind::Poll
             } else if self.attention.pending() {
                 WriteKind::Attention
-            } else if (new_event || a_changed || n_changed || prefs_changed) && !self.stale(now) {
+            } else if (new_event || a_changed || n_changed || prefs_changed || self.view_dirty) && !self.stale(now) {
                 // Any ok payload refreshes the device's DATA_FRESH_MS, so
                 // while the numbers are stale only alerts and polls go out
                 // and the device can show its stale state.
@@ -549,6 +597,7 @@ impl Engine {
             p.aa = Some(aa);
             p.pm = Some(pm);
             p.th = Some(th);
+            self.account_fields(&mut p, utc(now));
             (p, kind)
         };
 
@@ -571,6 +620,33 @@ impl Engine {
             }
         }
         Some(Write { payload, kind })
+    }
+
+    /// With several accounts: which one the payload shows (`ai`, `an`, `al`)
+    /// and the others' latest numbers (`o`), so the device can switch between
+    /// them on its own.
+    fn account_fields(&self, p: &mut Payload, now: DateTime<Utc>) {
+        let dirs = &self.settings.config_dirs;
+        let Some(ai) = self.active.as_ref().and_then(|a| dirs.iter().position(|d| d == a)) else { return };
+        let most = usize::from(u8::MAX);
+        if dirs.len() < 2 || ai > most {
+            return;
+        }
+        p.ai = Some(ai as u8);
+        p.an = Some(dirs.len().min(most) as u8);
+        p.al = Some(self.settings.account_label(ai));
+        let mut others = Vec::new();
+        for (i, d) in dirs.iter().enumerate() {
+            if i == ai || i > most || others.len() == crate::payload::OTHER_ACCOUNTS_MAX {
+                continue;
+            }
+            if let Some(r) = self.accounts.get(d).and_then(|a| a.last.as_ref()) {
+                others.push(OtherAccount::from_reading(i as u8, self.settings.account_label(i), r, now));
+            }
+        }
+        if !others.is_empty() {
+            p.o = Some(others);
+        }
     }
 
     /// The write from [`Engine::next_write`] reached the device.
@@ -607,6 +683,7 @@ impl Engine {
         // Every data payload carries the clock; no `tf` means it's off.
         if w.kind != WriteKind::NoData {
             self.sent_tf = Some(w.payload.tf.unwrap_or(0));
+            self.view_dirty = false;
         }
     }
 
@@ -774,6 +851,51 @@ mod tests {
         // B tokenless/logged out doesn't matter while A works.
         e.on_poll_results(T0 + 180, vec![(a.clone(), Ok(reading(20))), (b, Err(UsageError::NotLoggedIn("x".into())))]);
         assert!(!e.status(T0 + 180).logged_out);
+    }
+
+    // The account chosen on the device (its left button) stays shown,
+    // whatever the selector would pick, and the others ride along in `o`.
+    #[test]
+    fn account_chosen_on_the_device_stays_shown() {
+        let mut e = Engine::new(settings("config_dirs = ~/.claude, ~/.claude-work\naccount_labels = Home, Work\n"));
+        let a = PathBuf::from("/h/.claude");
+        let b = PathBuf::from("/h/.claude-work");
+        e.on_poll_results(T0, vec![(a.clone(), Ok(reading(10))), (b.clone(), Ok(reading(30)))]);
+        let w = write(&mut e, T0).unwrap();
+        assert_eq!((w.payload.ai, w.payload.an, w.payload.al.as_deref()), (Some(1), Some(2), Some("Work")));
+        let o = w.payload.o.unwrap();
+        assert_eq!((o.len(), o[0].i, o[0].l.as_str(), o[0].s), (1, 0, "Home", 10));
+        // Chosen there: shown at once, as a replay (its numbers are old).
+        e.on_device_view(0);
+        assert_eq!(e.status(T0 + 5).active_account, Some(a.clone()));
+        let w = write(&mut e, T0 + 5).unwrap();
+        assert_eq!((w.kind, w.payload.rp), (WriteKind::Event, Some(1)));
+        assert_eq!((w.payload.ai, w.payload.s), (Some(0), Some(10)));
+        assert_eq!(w.payload.o.unwrap()[0].i, 1);
+        assert!(write(&mut e, T0 + 6).is_none());
+        // B's use rising doesn't take the screen back.
+        e.on_poll_results(T0 + 60, vec![(a.clone(), Ok(reading(10))), (b.clone(), Ok(reading(45)))]);
+        assert_eq!(e.status(T0 + 60).active_account, Some(a.clone()));
+        // An index that names no account is ignored; the same one is no change.
+        e.on_device_view(7);
+        e.on_device_view(0);
+        assert_eq!(e.status(T0 + 60).active_account, Some(a));
+        e.on_device_view(1);
+        assert_eq!(e.status(T0 + 60).active_account, Some(b));
+    }
+
+    // An account chosen on the device before it has a reading is shown once
+    // it gets one.
+    #[test]
+    fn account_chosen_before_its_first_reading() {
+        let mut e = Engine::new(settings("config_dirs = ~/.claude, ~/.claude-work\n"));
+        let a = PathBuf::from("/h/.claude");
+        let b = PathBuf::from("/h/.claude-work");
+        e.on_poll_results(T0, vec![(a.clone(), Ok(reading(10)))]);
+        e.on_device_view(1);
+        assert_eq!(e.status(T0).active_account, Some(a.clone()), "nothing to show for B yet");
+        e.on_poll_results(T0 + 60, vec![(a, Ok(reading(50))), (b.clone(), Ok(reading(5)))]);
+        assert_eq!(e.status(T0 + 60).active_account, Some(b));
     }
 
     // An account whose main meter changes kind (verified for no 5-hour

@@ -100,6 +100,12 @@ The app writes one complete JSON object per write to RX
   not the alert), `pm` (pace marker on the usage bars, `pace.h`) and `th`
   (the palette, 11 hex colours run together, `theme_palette.h`). The device
   keeps them in NVS (`clawd_prefs.cpp`) so they apply from boot.
+- Several accounts (only with more than one `config_dirs` entry): `ai`
+  (which account the numbers are), `an` (how many), `al` (its name) and `o`
+  (the other accounts' numbers). The firmware keeps them all
+  (`accounts.cpp`); the primary button then switches the account shown
+  instead of sending Space, and the device says `{"view":N}` on TX so the app
+  keeps that account shown (`Engine::on_device_view`).
 - Device → app: `0x01` on REQ (`…-0004`) when it has no data yet;
   `{"dismiss":true}` on TX (`…-0003`) when a tap or the 2-minute timeout ends
   an alert. The app clears its own alert and doesn't echo a clear back. Alerts

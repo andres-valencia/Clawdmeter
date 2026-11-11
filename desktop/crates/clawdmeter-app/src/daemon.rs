@@ -294,6 +294,10 @@ pub async fn run(paths: Paths, mut commands: mpsc::UnboundedReceiver<Command>, s
                         log::info!("attention alert dismissed on the device");
                         engine.on_device_dismissed();
                     }
+                    DeviceEvent::View(i) => {
+                        log::info!("account {i} chosen on the device");
+                        engine.on_device_view(usize::from(i));
+                    }
                 }
             }
         }

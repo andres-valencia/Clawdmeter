@@ -489,6 +489,9 @@ pub enum DeviceEvent {
     /// TX `{"dismiss":true}`: the alert ended on the device (a tap, or its
     /// own timeout).
     Dismissed,
+    /// TX `{"view":N}`: the user chose account N (its `config_dirs`
+    /// position) on the device.
+    View(u8),
 }
 
 /// The device's events, in order.
@@ -504,6 +507,10 @@ pub fn device_event(uuid: Uuid, value: &[u8]) -> Option<DeviceEvent> {
         return None;
     }
     let text: String = std::str::from_utf8(value).ok()?.chars().filter(|c| !c.is_whitespace()).collect();
+    if let Some(rest) = text.split("\"view\":").nth(1) {
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        return digits.parse().ok().map(DeviceEvent::View);
+    }
     text.contains("\"dismiss\":true").then_some(DeviceEvent::Dismissed)
 }
 
@@ -906,12 +913,17 @@ mod tests {
         assert_eq!(device_event(TX_UUID, br#"{"err":true}"#), None);
         assert_eq!(device_event(TX_UUID, &[0xff, 0xfe]), None);
         assert_eq!(device_event(RX_UUID, br#"{"dismiss":true}"#), None);
+        assert_eq!(device_event(TX_UUID, br#"{"view":1}"#), Some(DeviceEvent::View(1)));
+        assert_eq!(device_event(TX_UUID, br#"{ "view": 0 }"#), Some(DeviceEvent::View(0)));
+        assert_eq!(device_event(TX_UUID, br#"{"view":-1}"#), None);
+        assert_eq!(device_event(TX_UUID, br#"{"view":999}"#), None);
         // The firmware's reply, as written.
         let src = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../firmware/src/ble.cpp"),
         )
         .unwrap();
         assert!(src.contains(r#"tx_char->setValue("{\"dismiss\":true}");"#));
+        assert!(src.contains(r#""{\"view\":%d}""#));
     }
 
     #[test]

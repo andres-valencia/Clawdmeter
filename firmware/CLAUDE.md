@@ -18,6 +18,8 @@ pins and hardware gotchas, which loads when you work in that folder.
   SDL2 simulator (HAL against SDL2, Arduino shims in `shim/`, BLE playback
   from `firmware/sim/*.jsonl`).
 - **Data path** (`main.cpp`): BLE payload → `payload.cpp` (JSON → `UsageData`)
+  → `accounts.cpp` (several accounts: keeps each one's numbers and swaps in
+  the one chosen with the primary button, as a replay)
   → `signals.cpp` (fast clock: activity, events, sessions; feeds
   `usage_rate.cpp`, the slow clock that turns a 15-min window of real samples
   into Idle/Normal/Active/Heavy) → the director. Buttons and serial commands

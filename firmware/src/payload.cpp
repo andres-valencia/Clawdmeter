@@ -85,6 +85,44 @@ bool payload_parse(const char* json, UsageData* out, const char** err) {
     d.pace_marker = pm.isNull() ? -1 : (int8_t)((pm | 0) ? 1 : 0);
     d.has_theme = theme_parse_hex(doc["th"] | "", d.theme);
 
+    // ---- several accounts (optional) ----
+    JsonVariant ai = doc["ai"];
+    if (ai.isNull()) {
+        d.acct_idx = -1;
+    } else {
+        int v = ai | 0;
+        d.acct_idx = (int8_t)(v < 0 ? 0 : v > 127 ? 127 : v);
+    }
+    {
+        int v = doc["an"] | 0;
+        d.acct_count = (int8_t)(v < 0 ? 0 : v > 127 ? 127 : v);
+    }
+    copy_str(d.acct_label, sizeof(d.acct_label), doc["al"] | "");
+    for (JsonVariant entry : doc["o"].as<JsonArray>()) {
+        if (d.other_count >= ACCT_OTHERS_MAX) break;
+        JsonVariant i = entry["i"];
+        if (i.isNull()) continue;
+        const int idx = i | -1;
+        if (idx < 0 || idx > 127) continue;
+        AcctNumbers& o = d.others[d.other_count++];
+        o.idx = (int8_t)idx;
+        copy_str(o.label, sizeof(o.label), entry["l"] | "");
+        o.session_pct = entry["s"] | 0.0f;
+        o.session_reset_mins = entry["sr"] | -1;
+        o.weekly_pct = entry["w"] | 0.0f;
+        o.weekly_reset_mins = entry["wr"] | -1;
+        const char* kind = entry["acct"] | "pro";
+        o.enterprise = (strcmp(kind, "ent") == 0);
+        o.weekly_only = (strcmp(kind, "week") == 0);
+        if (o.weekly_only) {   // as the main numbers above
+            o.session_pct = o.weekly_pct;
+            o.session_reset_mins = o.weekly_reset_mins;
+        }
+        o.time_pct = entry["tp"] | 0;
+        o.period_days = entry["pd"] | 30;
+        copy_str(o.reset_date, sizeof(o.reset_date), entry["rd"] | "");
+    }
+
     d.ok = doc["ok"] | false;
     d.valid = true;
     *out = d;

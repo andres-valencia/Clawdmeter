@@ -9,6 +9,7 @@ static uint32_t last_seq   = 0;
 static char     last_event = '\0';
 static int      sessions   = -1;
 static int      meter_kind = -1;   // usage_meter_kind of the last real sample
+static int      account    = -1;   // usage_account of the last real sample
 
 void signals_clear(void) {
     hooks_seen = false;
@@ -17,6 +18,7 @@ void signals_clear(void) {
     last_event = '\0';
     sessions = -1;
     meter_kind = -1;
+    account = -1;
     usage_rate_clear();
 }
 
@@ -47,6 +49,16 @@ SignalsUpdate signals_ingest_at(const UsageData* d, uint32_t now_ms) {
             u.meter_kind_changed = true;
         }
         meter_kind = kind;
+        // Another account's numbers (the user switched, or the app did):
+        // not comparable either, and never a reset.
+        const int acct = usage_account(d);
+        if (acct >= 0) {
+            if (account >= 0 && acct != account && !u.meter_kind_changed) {
+                usage_rate_restart();
+                u.meter_kind_changed = true;
+            }
+            account = acct;
+        }
     }
     u.session_reset = usage_rate_sample_at(now_ms, d->session_pct, !real_sample);
 

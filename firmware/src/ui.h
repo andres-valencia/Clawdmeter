@@ -8,6 +8,10 @@
 
 void ui_init(void);
 void ui_update(const UsageData* data);
+// Draw another account's kept numbers (the account button, accounts.h). Unlike
+// ui_update this is not a new update from the app: the meters' freshness and
+// the clock stay as they were.
+void ui_show_account(const UsageData* data);
 // Pace marker on the Pro/Max usage bars (`pm`, pace.h); redraws the last data.
 void ui_set_pace_marker(bool on);
 void ui_apply_theme(void);          // repaint everything in the live palette (theme_palette.h)

@@ -2,14 +2,70 @@
 //!
 //! Keys match `payload_parse()` in `firmware/src/payload.cpp`, in the order
 //! the old daemons wrote them, plus the additive fast-clock fields `a`, `e`,
-//! `es`, `n`, `rp` and the device settings `lv`, `aa`, `pm` and `th`
-//! (old firmware ignores unknown keys).
+//! `es`, `n`, `rp`, the device settings `lv`, `aa`, `pm` and `th`, and the
+//! account keys `ai`, `an`, `al` and `o` (old firmware ignores unknown keys).
 
 use chrono::{DateTime, Datelike, Months, TimeZone, Utc};
 use serde::Serialize;
 
 use crate::config::{ClockMode, Palette};
 use crate::usage::{SpendPeriod, UsageReading};
+
+/// Most characters of an account label (`al`, an `o` entry's `l`); the
+/// firmware keeps this many.
+pub const ACCOUNT_LABEL_MAX: usize = 10;
+/// Most accounts carried in `o`; the firmware keeps this many besides the
+/// shown one.
+pub const OTHER_ACCOUNTS_MAX: usize = 3;
+
+/// Another account's numbers (an `o` entry), so the device can show it on
+/// its own when the user switches accounts there. Same meaning as the
+/// top-level keys of the same name.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct OtherAccount {
+    /// Its position in `config_dirs` (what `ai` is for the shown account).
+    pub i: u8,
+    /// Its label (what `al` is for the shown account).
+    pub l: String,
+    /// Session % used (spend % for "ent"; 0 for "week").
+    pub s: u32,
+    /// Minutes until the session resets; -1 = not started.
+    pub sr: i64,
+    /// Weekly % used.
+    pub w: u32,
+    /// Minutes until the weekly reset; -1 = unknown.
+    pub wr: i64,
+    /// Account kind: "pro", "week" or "ent".
+    pub acct: String,
+    /// Enterprise: % of the billing period elapsed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tp: Option<u32>,
+    /// Enterprise: billing period length in days.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pd: Option<u32>,
+    /// Enterprise: reset date text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rd: Option<String>,
+}
+
+impl OtherAccount {
+    /// Account `i`'s entry for a reading, as of `now`.
+    pub fn from_reading(i: u8, label: String, r: &UsageReading, now: DateTime<Utc>) -> Self {
+        let p = Payload::from_reading(r, now);
+        OtherAccount {
+            i,
+            l: label,
+            s: p.s.unwrap_or(0),
+            sr: p.sr.unwrap_or(-1),
+            w: p.w.unwrap_or(0),
+            wr: p.wr.unwrap_or(-1),
+            acct: p.acct.unwrap_or_else(|| "pro".to_owned()),
+            tp: p.tp,
+            pd: p.pd,
+            rd: p.rd,
+        }
+    }
+}
 
 /// One device payload. `None` fields are omitted.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -99,12 +155,26 @@ pub struct Payload {
     /// it got.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub th: Option<Palette>,
+    /// Which account these numbers are: its position in `config_dirs`. Sent
+    /// with `an`, `al` and `o` only when several accounts are configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai: Option<u8>,
+    /// How many accounts are configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub an: Option<u8>,
+    /// The shown account's label (ASCII, at most [`ACCOUNT_LABEL_MAX`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub al: Option<String>,
+    /// The other accounts' latest numbers. The device keeps them and shows
+    /// one when the user switches accounts there, with or without the app.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub o: Option<Vec<OtherAccount>>,
 }
 
 /// Every key [`Payload`] can emit, in serialization order.
 pub const PAYLOAD_KEYS: &[&str] = &[
     "s", "sr", "w", "wr", "st", "acct", "tp", "pd", "rd", "t", "tf", "c", "ok", "b", "m", "x", "a", "e", "es", "n",
-    "rp", "lv", "aa", "pm", "th",
+    "rp", "lv", "aa", "pm", "th", "ai", "an", "al", "o",
 ];
 /// The fast-clock keys added in v0.4 (old firmware ignores them).
 pub const ADDITIVE_KEYS: &[&str] = &["a", "e", "es", "n", "rp"];
@@ -296,7 +366,8 @@ impl Payload {
     }
 
     /// JSON for one write of at most `limit` bytes: shorten the alert message,
-    /// then drop it, until it fits (Python daemon's `encode_payload`).
+    /// then drop it, until it fits (Python daemon's `encode_payload`); then
+    /// drop the other accounts (`o`), last first.
     pub fn encode(&self, limit: usize) -> Vec<u8> {
         let mut data = self.to_json().into_bytes();
         let mut p = self.clone();
@@ -312,6 +383,15 @@ impl Payload {
         }
         if data.len() > limit {
             p.m = None;
+            data = p.to_json().into_bytes();
+        }
+        while data.len() > limit && p.o.is_some() {
+            if let Some(o) = &mut p.o {
+                o.pop();
+            }
+            if p.o.as_ref().is_some_and(Vec::is_empty) {
+                p.o = None;
+            }
             data = p.to_json().into_bytes();
         }
         data
@@ -487,9 +567,35 @@ mod tests {
         assert!(long.len() <= 120);
         let v: serde_json::Value = serde_json::from_slice(&long).unwrap();
         assert!(v["m"].as_str().unwrap().ends_with("..."));
-        let tiny = Payload { m: Some("x".repeat(200)), ..base }.encode(26);
+        let tiny = Payload { m: Some("x".repeat(200)), ..base.clone() }.encode(26);
         let v: serde_json::Value = serde_json::from_slice(&tiny).unwrap();
         assert!(v.get("m").is_none());
+        // The other accounts go last, one at a time, once the message is gone.
+        let other = |i| OtherAccount { i, l: "Work".into(), acct: "pro".into(), ..Default::default() };
+        let two = Payload { o: Some(vec![other(1), other(2)]), ..base };
+        let all = two.to_json().len();
+        let v: serde_json::Value = serde_json::from_slice(&two.encode(all)).unwrap();
+        assert_eq!(v["o"].as_array().unwrap().len(), 2);
+        let v: serde_json::Value = serde_json::from_slice(&two.encode(all - 1)).unwrap();
+        assert_eq!(v["o"].as_array().unwrap().len(), 1);
+        assert_eq!(v["o"][0]["i"], 1);
+        let v: serde_json::Value = serde_json::from_slice(&two.encode(40)).unwrap();
+        assert!(v.get("o").is_none());
+    }
+
+    #[test]
+    fn other_account_entry() {
+        let now = at("2026-10-13T05:40:00Z");
+        let r = UsageReading {
+            session: Some(Window { pct: 15, resets_at: Some(at("2026-10-13T07:00:00Z")) }),
+            week: Some(Window { pct: 6, resets_at: Some(at("2026-10-18T22:00:00Z")) }),
+            ..Default::default()
+        };
+        let o = OtherAccount::from_reading(1, "Work".into(), &r, now);
+        assert_eq!(
+            serde_json::to_string(&o).unwrap(),
+            r#"{"i":1,"l":"Work","s":15,"sr":80,"w":6,"wr":8180,"acct":"pro"}"#
+        );
     }
 
     #[test]
@@ -520,6 +626,10 @@ mod tests {
             aa: Some(120),
             pm: Some(1),
             th: Some(Palette::default()),
+            ai: Some(0),
+            an: Some(2),
+            al: Some("Home".into()),
+            o: Some(vec![OtherAccount { i: 1, l: "Work".into(), acct: "pro".into(), ..Default::default() }]),
         };
         let v: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&pl.to_json()).unwrap();
         // serde_json's Map is sorted without preserve_order; check membership.

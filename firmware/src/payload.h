@@ -20,6 +20,10 @@
 //   pm  pace marker on the usage bars, 1 on / 0 off, -1 absent
 //   th  the palette: TH_COUNT 6-digit hex colours run together (theme_palette.h);
 //       has_theme false when absent or malformed
+//   ai  which account the numbers are (-1 absent)   an  how many the app has
+//   al  that account's name                         o   the others: an array of
+//       {i, l, s, sr, w, wr, acct, tp, pd, rd}, the same meaning per account;
+//       at most ACCT_OTHERS_MAX are kept, entries without `i` are skipped
 //
 // Returns false on malformed JSON; `*err` (if non-null) then points at a
 // static description. `out` is fully overwritten on success, untouched on

@@ -176,6 +176,53 @@ static void test_long_strings_truncate(void) {
     TEST_ASSERT_EQUAL_size_t(sizeof(d.status) - 1, strlen(d.status));
 }
 
+// Several accounts: which one the numbers are, and the others' in `o`.
+static void test_accounts(void) {
+    UsageData d;
+    // Absent: one account.
+    TEST_ASSERT_TRUE(payload_parse("{\"s\":1,\"ok\":true}", &d, nullptr));
+    TEST_ASSERT_EQUAL_INT(-1, d.acct_idx);
+    TEST_ASSERT_EQUAL_INT(0, d.acct_count);
+    TEST_ASSERT_EQUAL_STRING("", d.acct_label);
+    TEST_ASSERT_EQUAL_INT(0, d.other_count);
+    TEST_ASSERT_EQUAL_INT(-1, usage_account(&d));
+
+    TEST_ASSERT_TRUE(payload_parse(
+        "{\"s\":10,\"ok\":true,\"ai\":1,\"an\":2,\"al\":\"A name far too long\","
+        "\"o\":[{\"i\":0,\"l\":\"Home\",\"s\":55,\"sr\":40,\"w\":70,\"wr\":900,\"acct\":\"pro\"}]}", &d, nullptr));
+    TEST_ASSERT_EQUAL_INT(1, d.acct_idx);
+    TEST_ASSERT_EQUAL_INT(2, d.acct_count);
+    TEST_ASSERT_EQUAL_INT(1, usage_account(&d));
+    TEST_ASSERT_EQUAL_STRING("A name far", d.acct_label);   // cut to ACCT_LABEL_LEN - 1
+    TEST_ASSERT_EQUAL_INT(1, d.other_count);
+    TEST_ASSERT_EQUAL_INT(0, d.others[0].idx);
+    TEST_ASSERT_EQUAL_STRING("Home", d.others[0].label);
+    TEST_ASSERT_EQUAL_FLOAT(55, d.others[0].session_pct);
+    TEST_ASSERT_EQUAL_INT(40, d.others[0].session_reset_mins);
+    TEST_ASSERT_EQUAL_FLOAT(70, d.others[0].weekly_pct);
+    TEST_ASSERT_EQUAL_INT(900, d.others[0].weekly_reset_mins);
+    TEST_ASSERT_FALSE(d.others[0].enterprise);
+    TEST_ASSERT_FALSE(d.others[0].weekly_only);
+    TEST_ASSERT_EQUAL_INT(30, d.others[0].period_days);
+
+    // Entries without an index are skipped; at most ACCT_OTHERS_MAX are kept,
+    // with the usual defaults for what an entry leaves out.
+    TEST_ASSERT_TRUE(payload_parse(
+        "{\"ok\":true,\"ai\":0,\"an\":6,\"o\":[{\"l\":\"x\"},{\"i\":1},{\"i\":2},{\"i\":3},{\"i\":4}]}", &d, nullptr));
+    TEST_ASSERT_EQUAL_INT(ACCT_OTHERS_MAX, d.other_count);
+    TEST_ASSERT_EQUAL_INT(1, d.others[0].idx);
+    TEST_ASSERT_EQUAL_INT(3, d.others[ACCT_OTHERS_MAX - 1].idx);
+    TEST_ASSERT_EQUAL_INT(-1, d.others[0].session_reset_mins);
+    TEST_ASSERT_EQUAL_STRING("", d.others[0].label);
+
+    // `o` of another type is ignored.
+    TEST_ASSERT_TRUE(payload_parse("{\"ok\":true,\"ai\":0,\"an\":2,\"o\":5}", &d, nullptr));
+    TEST_ASSERT_EQUAL_INT(0, d.other_count);
+    // An index with a single account configured isn't "several accounts".
+    TEST_ASSERT_TRUE(payload_parse("{\"ok\":true,\"ai\":0,\"an\":1}", &d, nullptr));
+    TEST_ASSERT_EQUAL_INT(-1, usage_account(&d));
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_rejects_malformed_json);
@@ -189,5 +236,6 @@ int main(void) {
     RUN_TEST(test_pace_marker);
     RUN_TEST(test_theme);
     RUN_TEST(test_long_strings_truncate);
+    RUN_TEST(test_accounts);
     return UNITY_END();
 }

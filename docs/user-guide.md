@@ -184,6 +184,35 @@ If updates stop, the meters dim. The last reading is retained rather than
 replaced with zero. See [Clawd's director](clawd-director.md) for timing
 and character rules.
 
+### Several accounts
+
+To watch a second Claude account, sign in to it in its own config folder
+(`CLAUDE_CONFIG_DIR=~/.claude-work claude`, then `/login`) and list both
+folders in `config_dirs`, for example:
+
+```
+config_dirs = ~/.claude, ~/.claude-work
+account_labels = Personal, Work
+```
+
+The first meter's label then shows the account's name instead of "Session"
+(where the panel is wide enough for it), and the BOOT button switches to the next account instead of sending Space. The
+account you choose stays shown, on the device and in the app, until you press
+the button again; the choice survives a restart. The device keeps the last
+numbers of every account, so the button also works while the computer is
+asleep or out of range.
+
+### Without the computer
+
+When the Bluetooth link drops (the computer is off, asleep or out of range),
+a board with a PWR button keeps its last numbers on screen, dimmed, and the
+status line turns red and alternates between `Offline` and
+`Last update 14:32`: the time the app last wrote to the device (or how long
+ago, with the clock off). The numbers come back live when the app reconnects.
+A board that has had no data since it started, or whose pairing was just
+cleared, shows the pairing hint instead; so do boards without a PWR button,
+which re-pair by a touch hold on that hint.
+
 ### Buttons
 
 | Button | Action |
@@ -204,7 +233,8 @@ seconds and preserves comments and unknown keys when saving.
 
 | Key | Default | Effect |
 | --- | --- | --- |
-| `config_dirs` | `~/.claude` | Comma-separated Claude Code config folders. The app selects the account whose usage increased most recently (session usage, or weekly usage on an account with no 5-hour limit); before any rise, the one with the highest percentage. `CLAUDE_CONFIG_DIR` supplies the default when this key is absent. |
+| `config_dirs` | `~/.claude` | Comma-separated Claude Code config folders. The app selects the account whose usage increased most recently (session usage, or weekly usage on an account with no 5-hour limit); before any rise, the one with the highest percentage. `CLAUDE_CONFIG_DIR` supplies the default when this key is absent. With more than one folder, the device's BOOT button switches the account shown (see [Several accounts](#several-accounts)). |
+| `account_labels` | folder names | Comma-separated names for the accounts, in `config_dirs` order, shown on the device as the first meter's label. At most 10 ASCII characters each; a blank entry keeps the folder name (`.claude-work` shows as `claude-wor`). |
 | `reset_chime` | `off` | Chime on the device when the session usage resets (boards with a speaker). The older `chime` key still works. |
 | `alert_chime` | `off` | Chime on the device when Claude needs you (boards with a speaker). The older `beep` key still works. |
 | `desktop_chime` | `off` | Play the same chime on this computer when Claude needs you. Follows `alert_on`. |

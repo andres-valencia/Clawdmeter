@@ -66,7 +66,9 @@ is faked behind `FlashHardware`.
   `%LOCALAPPDATA%\Clawdmeter\`): `config`, `events.log`, `attention`,
   `clear-<sid>`, `ble-address`, `daemon.log`, `usage-blocks.json`, app
   state and locks.
-- Config keys: `config_dirs`, `poll_interval`, `heartbeat_interval`,
+- Config keys: `config_dirs`, `account_labels` (names for the accounts, in
+  `config_dirs` order, sent as `al` / `o[].l`; hand-edited, the window
+  doesn't show it), `poll_interval`, `heartbeat_interval`,
   `reset_chime` and `alert_chime` (device chimes; the old `chime` / `beep`
   keys are read when these are absent), `desktop_chime` (the same ding on
   this computer via rodio, ALSA on Linux), `clock`, `liveliness` (1–5,

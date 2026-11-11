@@ -421,6 +421,9 @@ impl DeviceTheme {
 pub struct Settings {
     /// Claude config dirs to poll (accounts). Default `[~/.claude]`.
     pub config_dirs: Vec<PathBuf>,
+    /// Short names for the accounts, in `config_dirs` order
+    /// (`account_labels`). The device shows them when there are several.
+    pub account_labels: Vec<String>,
     /// `/usage` poll interval while a session is working (s, >= 10).
     pub poll_interval: u64,
     /// True when `poll_interval` came from the file or the env var, in which
@@ -587,6 +590,7 @@ impl Settings {
             cfg.get("heartbeat_interval").and_then(parse_interval).unwrap_or(DEFAULT_HEARTBEAT_INTERVAL);
         Settings {
             config_dirs: parse_config_dirs(cfg.get("config_dirs"), paths),
+            account_labels: parse_account_labels(cfg.get("account_labels")),
             poll_interval,
             poll_interval_explicit: file_poll.is_some() || env_default.is_some(),
             heartbeat_interval,
@@ -617,6 +621,22 @@ impl Settings {
                 }
                 p
             },
+        }
+    }
+
+    /// The name the device shows for account `idx` (its `config_dirs`
+    /// position): its `account_labels` entry, else its folder's name without
+    /// the leading dot. ASCII, at most `ACCOUNT_LABEL_MAX` characters.
+    pub fn account_label(&self, idx: usize) -> String {
+        let named = self.account_labels.get(idx).filter(|l| !l.is_empty()).cloned();
+        let folder = self.config_dirs.get(idx).and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned());
+        let raw = named.or(folder).unwrap_or_default();
+        let ascii = crate::attention::to_ascii(raw.trim_start_matches('.'), usize::MAX);
+        let label: String = ascii.chars().take(crate::payload::ACCOUNT_LABEL_MAX).collect();
+        if label.is_empty() {
+            format!("Acct {}", idx + 1)
+        } else {
+            label
         }
     }
 
@@ -739,6 +759,16 @@ pub fn parse_config_dirs(raw: Option<&str>, paths: &Paths) -> Vec<PathBuf> {
     }
 }
 
+/// `account_labels`: comma list, one name per `config_dirs` entry, in order.
+/// A blank entry leaves that account its folder's name.
+pub fn parse_account_labels(raw: Option<&str>) -> Vec<String> {
+    let raw = raw.unwrap_or("").trim();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    raw.split(',').map(|l| l.trim().to_owned()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -805,6 +835,16 @@ mod tests {
         assert_eq!(Settings::from_config(&cfg, &p, Some("")).poll_interval, 180);
         let file = ConfigFile::parse("poll_interval = 200\n");
         assert_eq!(Settings::from_config(&file, &p, Some("45")).poll_interval, 200);
+    }
+
+    #[test]
+    fn account_labels() {
+        let s = settings("config_dirs = ~/.claude, ~/.claude-work, ~/c\naccount_labels = Home, , Caf\u{e9} au lait\n");
+        assert_eq!(s.account_label(0), "Home");
+        assert_eq!(s.account_label(1), "claude-wor", "a blank name: the folder's, cut to ten");
+        assert_eq!(s.account_label(2), "Cafe au la", "ASCII only");
+        assert_eq!(s.account_label(9), "Acct 10");
+        assert_eq!(settings("").account_label(0), "claude");
     }
 
     // Ported from the legacy daemon test test_macos_multidir.py (read_config_dirs).

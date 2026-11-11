@@ -498,6 +498,16 @@ void ble_send_dismiss(void) {
     }
 }
 
+void ble_send_view(int idx) {
+    if (state == BLE_STATE_CONNECTED && tx_char) {
+        char msg[24];
+        snprintf(msg, sizeof(msg), "{\"view\":%d}", idx);
+        tx_char->setValue((const uint8_t*)msg, strlen(msg));
+        tx_char->notify();
+        Serial.printf("BLE: account %d chosen on the device\n", idx);
+    }
+}
+
 void ble_set_battery_level(int pct) {
     if (!hid_dev || pct < 0) return;
     if (pct > 100) pct = 100;

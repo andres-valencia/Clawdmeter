@@ -144,6 +144,34 @@ static void test_meter_kind_change_is_not_a_reset(void) {
     TEST_ASSERT_FALSE(u.meter_kind_changed);
 }
 
+// Another account's numbers (the user switched accounts on the device, or
+// the app did) are a new baseline: a lower % is not a reset.
+static void test_account_change_is_not_a_reset(void) {
+    UsageData home = parse("{\"s\":60,\"sr\":90,\"ok\":true,\"ai\":0,\"an\":2}");
+    UsageData work = parse("{\"s\":5,\"sr\":200,\"ok\":true,\"ai\":1,\"an\":2}");
+    SignalsUpdate u = signals_ingest_at(&home, 1 * MIN);
+    TEST_ASSERT_FALSE(u.meter_kind_changed);                                // first sight
+    u = signals_ingest_at(&work, 2 * MIN);                                  // 60 -> 5
+    TEST_ASSERT_FALSE(u.session_reset);
+    TEST_ASSERT_TRUE(u.meter_kind_changed);
+    u = signals_ingest_at(&home, 3 * MIN);                                  // and back
+    TEST_ASSERT_FALSE(u.session_reset);
+    TEST_ASSERT_TRUE(u.meter_kind_changed);
+    // The same account dropping is still its reset.
+    UsageData fresh = parse("{\"s\":0,\"sr\":-1,\"ok\":true,\"ai\":0,\"an\":2}");
+    u = signals_ingest_at(&fresh, 4 * MIN);
+    TEST_ASSERT_TRUE(u.session_reset);
+    TEST_ASSERT_FALSE(u.meter_kind_changed);
+    // The other account's kept numbers, shown as a replay, aren't a sample.
+    UsageData kept = parse("{\"s\":5,\"sr\":199,\"rp\":1,\"ok\":true,\"ai\":1,\"an\":2}");
+    u = signals_ingest_at(&kept, 5 * MIN);
+    TEST_ASSERT_FALSE(u.session_reset);
+    TEST_ASSERT_FALSE(u.meter_kind_changed);
+    u = signals_ingest_at(&fresh, 6 * MIN);                                 // so 0 stays the baseline
+    TEST_ASSERT_FALSE(u.session_reset);
+    TEST_ASSERT_FALSE(u.meter_kind_changed);
+}
+
 static void test_sessions_change(void) {
     UsageData d = parse("{\"n\":2}");
     TEST_ASSERT_TRUE(signals_ingest_at(&d, 1000).sessions_changed);
@@ -166,5 +194,6 @@ int main(void) {
     RUN_TEST(test_no_data_beat_is_not_a_sample);
     RUN_TEST(test_sessions_change);
     RUN_TEST(test_meter_kind_change_is_not_a_reset);
+    RUN_TEST(test_account_change_is_not_a_reset);
     return UNITY_END();
 }

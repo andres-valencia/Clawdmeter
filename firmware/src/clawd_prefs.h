@@ -18,3 +18,8 @@ int  attn_anim_get(void);
 void pace_marker_set(bool on);      // apply; saved only when it changes
 bool pace_marker_get(void);
 void theme_set(const uint32_t p[TH_COUNT]);   // repaint live; saved only when it changes
+
+// The account chosen with the account button (accounts.h), kept across
+// reboots. -1 = none chosen: the device shows whichever the app does.
+int  account_view_load(void);
+void account_view_save(int idx);

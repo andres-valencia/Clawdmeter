@@ -47,6 +47,19 @@ static void save(const char* key, uint8_t v) {
     prefs.end();
 }
 
+// Stored as index + 1, so an absent key (0) reads as "none chosen".
+int account_view_load(void) {
+    Preferences prefs;
+    prefs.begin("clawdmeter", true);
+    const int v = prefs.getUChar("acct_view", 0);
+    prefs.end();
+    return v - 1;
+}
+
+void account_view_save(int idx) {
+    save("acct_view", (uint8_t)(idx < 0 || idx > 127 ? 0 : idx + 1));
+}
+
 void liveliness_set(int level) {
     level = clawd_liveliness_clamp(level);
     if (level == clawd_liveliness()) return;

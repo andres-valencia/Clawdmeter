@@ -104,8 +104,10 @@ static lv_image_dsc_t battery_dscs[6];  // empty, low, medium, full, charging, p
 // ---- Live-data freshness → which usage sub-view to show ----
 // Live meters when data is flowing; the same meters dimmed when the host is
 // connected but no usage update landed within DATA_FRESH_MS (stale: the last
-// numbers stay, visibly not live, and the status line says so); the pairing
-// hint when BLE is down. The corner Clawd stays in his seat in all three:
+// numbers stay, visibly not live, and the status line says so). With BLE down
+// a board that has numbers keeps them, dimmed, under an "Offline" status line
+// that also says when they were last updated; one with nothing to show (or
+// whose pairing was just cleared) shows the pairing hint. The corner Clawd stays in his seat in all three:
 // there is only ever one Clawd. Re-evaluated every loop in ui_tick_anim().
 #define STALE_OPA LV_OPA_40
 static uint32_t  last_data_ms = 0;      // lv_tick when the last valid usage update landed
@@ -414,6 +416,9 @@ static void build_pair_group(lv_obj_t* parent) {
 bool ui_pair_hint_visible(void) { return view_state == 0; }
 
 void ui_set_pair_hint(PairHint hint) {
+    // A cleared pairing starts over: the hint, not the last host's numbers
+    // (update_view_state).
+    if (hint == PAIR_HINT_CLEARED) data_received = false;
     if (hint == pair_hint) return;
     pair_hint = hint;
     pair_hint_since = lv_tick_get();
@@ -500,6 +505,38 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_obj_set_style_text_font(lbl_anim, L.status_font, 0);
     themed_text(lbl_anim, TH_ACCENT);
     lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, L.status_y);
+}
+
+// ---- No host, last numbers kept on screen: the status line says so, in
+// red (the default palette's amber is its accent) and without the whimsy, alternating with when they were updated.
+static bool status_offline = false;   // the line is in its offline colour
+static int  offline_phase  = -1;      // which of its two texts is up
+#define OFFLINE_ALT_MS 4000           // "Offline" <-> "Last update ..."
+
+// When the numbers on screen were last updated: the wall clock then, if the
+// app sends one, else how long ago. On a line too narrow for the sentence,
+// the time alone; empty when even that doesn't fit.
+static void last_update_text(char* buf, size_t len, uint32_t now) {
+    char when[16];
+    if (clock_base_epoch > 0) {
+        time_t t = (time_t)clock_base_epoch;
+        struct tm tmv;
+        gmtime_r(&t, &tmv);   // the epoch is already local wall-clock time
+        if (clock_fmt == 12) {
+            int h12 = tmv.tm_hour % 12;
+            if (h12 == 0) h12 = 12;
+            snprintf(when, sizeof(when), "%d:%02d %s", h12, tmv.tm_min, tmv.tm_hour < 12 ? "AM" : "PM");
+        } else {
+            snprintf(when, sizeof(when), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
+        }
+    } else {
+        const unsigned mins = (unsigned)((now - last_data_ms) / 60000);
+        if (mins < 60) snprintf(when, sizeof(when), "%um ago", mins);
+        else           snprintf(when, sizeof(when), "%uh ago", mins / 60);
+    }
+    snprintf(buf, len, "Last update %s", when);
+    if (layout_text_width(L.status_font, buf) > L.status_w) snprintf(buf, len, "%s", when);
+    if (layout_text_width(L.status_font, buf) > L.status_w) buf[0] = '\0';
 }
 
 // ---- Attention message on the status line (the director sequences the rest).
@@ -630,11 +667,33 @@ void ui_set_pace_marker(bool on) {
 
 void ui_apply_theme(void) {
     for (int i = 0; i < n_themed; i++) paint(themed[i]);
+    if (status_offline) lv_obj_set_style_text_color(lbl_anim, theme_color(TH_RED), 0);
     apply_pair_text();   // its last line follows the hold state
     if (have_last_data) {
         apply_bar_colors(&last_data);
         if (last_data.enterprise) apply_period_colors(&last_data);
     }
+}
+
+// The first card's pill. With several accounts it names the account the
+// meters show instead of what the card measures (`kind`; the second card
+// still says "Weekly"). Only where the name fits beside the widest number,
+// so it never comes and goes with the digits.
+static const char* first_pill(const UsageData* data, const char* kind) {
+    if (usage_account(data) < 0 || !data->acct_label[0]) return kind;
+    const int32_t inner  = L.card[0].w - 2 * L.pad_x;
+    const int32_t number = layout_text_width(data->enterprise ? L.ent_pct_font : L.pct_font, "100%");
+    const int32_t pill   = layout_text_width(L.pill_font, data->acct_label) + 2 * L.pill_pad_x;
+    return number + L.pill_pad_x + pill <= inner ? data->acct_label : kind;
+}
+
+static void draw_usage(const UsageData* data);
+
+void ui_show_account(const UsageData* data) {
+    if (!data->valid || !data->ok) return;
+    last_data = *data;
+    have_last_data = true;
+    draw_usage(data);
 }
 
 void ui_update(const UsageData* data) {
@@ -659,6 +718,11 @@ void ui_update(const UsageData* data) {
         apply_title_font();
     }
 
+    draw_usage(data);
+}
+
+// The two cards for `data`: numbers, bars, pills and the account's name.
+static void draw_usage(const UsageData* data) {
     int s_pct = (int)(data->session_pct + 0.5f);
 
     // No 5-hour limit: the one card left sits in the middle of the space the
@@ -669,7 +733,7 @@ void ui_update(const UsageData* data) {
     if (data->enterprise) {
         // Spending box: big number-only label + small "%" symbol + desc + pace
         lv_obj_set_style_text_font(lbl_session_pct, L.ent_pct_font, 0);
-        lv_label_set_text(lbl_session_label, L.pills[2]);
+        lv_label_set_text(lbl_session_label, first_pill(data, L.pills[2]));
         lv_obj_add_flag(lbl_session_reset, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(lbl_session_pct_sym, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(lbl_spending_desc,   LV_OBJ_FLAG_HIDDEN);
@@ -679,7 +743,7 @@ void ui_update(const UsageData* data) {
         // No 5-hour limit (verified Ultra): the week moves up into the first
         // card and the second card goes away.
         lv_obj_set_style_text_font(lbl_session_pct, L.pct_font, 0);
-        lv_label_set_text(lbl_session_label, L.pills[data->weekly_only ? 1 : 0]);
+        lv_label_set_text(lbl_session_label, first_pill(data, L.pills[data->weekly_only ? 1 : 0]));
         lv_obj_clear_flag(lbl_session_reset, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(lbl_session_pct_sym, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(lbl_spending_desc,   LV_OBJ_FLAG_HIDDEN);
@@ -731,7 +795,13 @@ static void update_view_state(void) {
     if (!usage_group || !pair_group) return;
     int v;
     if (!s_ble_connected) {
-        v = 0;  // pairing hint
+        // No host. A board that already has numbers keeps them up, dimmed,
+        // while the computer is away, and the status line says Offline and
+        // when they were last updated (ui_tick_anim); the pairing hint is
+        // for a board with nothing to show. Boards without a
+        // PWR button re-pair by a touch hold on the hint itself, so they
+        // always show it; a cleared pairing brings it back (ui_set_pair_hint).
+        v = (data_received && have_last_data && board_caps().has_pwr_button) ? 1 : 0;
     } else if (data_received && data_ok && (lv_tick_get() - last_data_ms) < DATA_FRESH_MS) {
         v = 2;  // live usage
     } else {
@@ -783,6 +853,30 @@ void ui_tick_anim(void) {
     }
 
     if (alert_active) return;          // the status line holds the alert message
+
+    // No host and the last numbers still up (update_view_state): "Offline",
+    // then when they were last updated, back and forth.
+    const bool offline = !s_ble_connected && view_state == 1;
+    if (offline != status_offline) {
+        status_offline = offline;
+        lv_obj_set_style_text_color(lbl_anim, theme_color(offline ? TH_RED : TH_ACCENT), 0);
+        offline_phase = -1;
+        still_shown = nullptr;         // the usual line redraws once the host is back
+        frozen_shown = nullptr;
+        anim_last_ms = 0;
+    }
+    if (offline) {
+        const int phase = (int)((now / OFFLINE_ALT_MS) & 1);
+        if (phase != offline_phase) {
+            offline_phase = phase;
+            static char obuf[48];
+            obuf[0] = '\0';
+            if (phase) last_update_text(obuf, sizeof(obuf), now);
+            if (!obuf[0]) snprintf(obuf, sizeof(obuf), "%s Offline", spinner_frames[1]);
+            lv_label_set_text(lbl_anim, obuf);
+        }
+        return;
+    }
 
     if (still) {
         // One glyph, one word per state; redrawn only when it changes.
