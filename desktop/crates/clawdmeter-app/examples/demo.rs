@@ -8,8 +8,14 @@
 //!   cargo run -p clawdmeter-app --example demo -- [--page PAGE] [--status connected|off]
 //!   [--board none|fresh|current|old] [--setup welcome|board|flash|pair|hooks|done] [--hooks-preview]
 //!   [--flash-to identify|firmware|flash|done] [--shop] [--accounts retrying] [--refresh wait|checking]
-//!   [--advanced] [--session idle|week] [--height PX]
+//!   [--app-update download|downloading|ready|failed|none|linux|linux-menu]
+//!   [--advanced] [--session idle|week] [--buttons custom] [--edit primary|secondary|pwr] [--record]
+//!   [--height PX]
 //! ```
+//!
+//! `--buttons custom` gives the secondary button a held shortcut and PWR a
+//! media key; `--edit` opens a button's editor on the Device page, and
+//! `--record` has it listening for a shortcut.
 //!
 //! `--accounts retrying` adds a second account that is being rate-limited;
 //! `--refresh` shows the Overview's refresh button waiting out the
@@ -159,6 +165,22 @@ fn fake_status(paths: &Paths, retrying: bool, refresh: Option<String>, session: 
     });
 }
 
+fn demo_notes() -> Vec<clawdmeter_flash::release::ReleaseNotes> {
+    let note = |tag: &str, published: &str, body: &str| clawdmeter_flash::release::ReleaseNotes {
+        tag: tag.into(),
+        published: published.into(),
+        body: body.into(),
+    };
+    vec![
+        note(
+            "v1.9.0",
+            "2026-11-10",
+            "## New\n- App updates: release notes, download and skip, from the sidebar\n- Remap the board's buttons from the Device page\n## Fixed\n- The weekly meter no longer jumps after a reset",
+        ),
+        note("v1.8.3", "2026-10-28", "## Fixed\n- Pairing on macOS after a firmware update\n- Start at login under an AppImage"),
+    ]
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let paths = Paths::for_user();
@@ -184,7 +206,20 @@ fn main() {
     let hooks_preview = args.iter().any(|a| a == "--hooks-preview");
     let shop = args.iter().any(|a| a == "--shop");
     let advanced = args.iter().any(|a| a == "--advanced");
+    let record = args.iter().any(|a| a == "--record");
+    let edit = arg(&args, "--edit").map(|b| match b.as_str() {
+        "secondary" => clawdmeter_core::config::Button::Secondary,
+        "pwr" => clawdmeter_core::config::Button::Pwr,
+        _ => clawdmeter_core::config::Button::Primary,
+    });
+    if arg(&args, "--buttons").as_deref() == Some("custom") {
+        use std::io::Write as _;
+        std::fs::create_dir_all(paths.config_file.parent().unwrap()).unwrap();
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&paths.config_file).unwrap();
+        writeln!(f, "button_secondary = ctrl+shift+m hold\nbutton_pwr = volume-up").unwrap();
+    }
     // A taller window, so a long page fits one screenshot.
+    let app_update = arg(&args, "--app-update");
     let height = arg(&args, "--height").and_then(|h| h.parse::<f32>().ok());
 
     clawdmeter_app::ui::open_with_height(height, move |window, cx| {
@@ -194,6 +229,29 @@ fn main() {
         let settings = cx.new(|cx| SettingsView::with_usb(p.clone(), Page::Device, false, cx));
         let flasher = cx.new(|cx| FlasherView::with_hardware(p.clone(), Some(manifest), hw, cx));
         let app = AppView::build(p, page, overview, settings.clone(), flasher.clone(), window, cx);
+        // `--app-update` offers the fake release as an app update too, with
+        // made-up notes and the download in the given state (`none`: an
+        // install with no package to download).
+        if let Some(state) = app_update {
+            let tag = format!("v{VERSION}");
+            app.update_view().update(cx, |u, _| {
+                u.offer(true);
+                u.show_notes(&tag, demo_notes());
+                match state.as_str() {
+                    "none" => u.set_package(None),
+                    // Linux's package menu, closed or open, on a `.deb` install.
+                    "linux" | "linux-menu" => {
+                        use clawdmeter_flash::release::AppPackage;
+                        u.set_choices(AppPackage::for_linux("x86_64"), Some(AppPackage::Deb), state == "linux-menu");
+                    }
+                    state => {
+                        // Whatever this build would update from.
+                        u.set_package(Some(clawdmeter_flash::release::AppPackage::Dmg));
+                        u.show_download_state(&tag, state);
+                    }
+                }
+            });
+        }
         if shop {
             flasher.update(cx, |f, cx| f.show_shop(true, cx));
         }
@@ -202,6 +260,9 @@ fn main() {
         }
         if hooks_preview {
             settings.update(cx, |s, cx| s.review_hook_install(cx));
+        }
+        if let Some(b) = edit {
+            settings.update(cx, |s, cx| s.edit_button(b, record, window, cx));
         }
         let wizard = app.wizard().clone();
         if let Some(step) = setup_step {

@@ -32,6 +32,7 @@ Nested `CLAUDE.md` files load when you read or edit a file in their folder.
 | `waveshare_amoled_18_c6` | Waveshare ESP32-C6-Touch-AMOLED-1.8 | C6 (no PSRAM), SH8601 368×448 |
 | `waveshare_amoled_206` | Waveshare ESP32-S3-Touch-AMOLED-2.06 | CO5300 410×502 watch, 32 MB flash |
 | `waveshare_lcd_154` | Waveshare ESP32-S3-Touch-LCD-1.54 | ST7789 SPI TFT 240×240, no PMU |
+| `waveshare_lcd_147` | Waveshare ESP32-S3-Touch-LCD-1.47 | JD9853 SPI TFT 320×172 landscape, no PMU, BOOT-as-PWR |
 | `waveshare_lcd_4` | Waveshare ESP32-S3-Touch-LCD-4 | ST7701 RGB 480×480, one button |
 | `waveshare_lcd_21` | Waveshare ESP32-S3-Touch-LCD-2.1 / 2.1B | ST7701S RGB 480×480 round, CST820 touch, TCA9554, one button |
 | `lilygo_t4s3` | LILYGO T4-S3 | RM690B0 AMOLED 450×600, CST226SE touch, SY6970 charger |
@@ -95,7 +96,9 @@ The app writes one complete JSON object per write to RX
   sequence), `n` (active sessions). `rp:1` marks the usage numbers as a replay
   (heartbeats and writes between polls): the rate math and reset detector skip
   them, but a new `es` in the same write still fires.
-- Device settings, on every data payload: `lv` (liveliness 1–5), `aa`
+- Device settings, on every data payload: `k1`/`k2`/`k3` (what the
+  primary, secondary and PWR buttons do: presets 0–6, keyboard shortcuts
+  and media keys as bit fields, `button_action.h`), `lv` (liveliness 1–5), `aa`
   (attention animation seconds: 120, 30, 10, 0 = off; only his animation,
   not the alert), `pm` (pace marker on the usage bars, `pace.h`) and `th`
   (the palette, 11 hex colours run together, `theme_palette.h`). The device

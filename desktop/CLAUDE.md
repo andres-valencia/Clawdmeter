@@ -28,7 +28,8 @@ is faked behind `FlashHardware`.
   optional year; fixtures in `tests/fixtures/` are real or derived from the
   CLI source), `probe` / `oauth` (usage sources), `cadence` (when to poll),
   `backoff`, `selector` (which account is shown), `events` (tails
-  `events.log`), `attention`, `payload`, `rate`, `engine` (I/O-free state
+  `events.log`), `attention`, `payload`, `buttons` (device button actions,
+  their config spelling and `k1`–`k3` codes), `rate`, `engine` (I/O-free state
   machine: `next_write` / `mark_written`), `autostart` (systemd / XDG /
   LaunchAgent / Run key, legacy-daemon detection + `disable_legacy`),
   `launch`, `platform`.
@@ -61,7 +62,7 @@ is faked behind `FlashHardware`.
   [--manifest PATH]`; `--ports`; `--info PORT`; `hook MODE [event]`.
 - Env: `CLAWDMETER_LOG`, `CLAWDMETER_NO_TRAY`, `POLL_INTERVAL`,
   `CLAUDE_CONFIG_DIR` (default account), `CLAWDMETER_BLE_ADDRESS`,
-  `CLAWDMETER_DECORATIONS`.
+  `CLAWDMETER_DECORATIONS`, `CLAWDMETER_BUTTON_LAYOUT`.
 - State lives in one dir, `~/.config/clawdmeter/` (Windows:
   `%LOCALAPPDATA%\Clawdmeter\`): `config`, `events.log`, `attention`,
   `clear-<sid>`, `ble-address`, `daemon.log`, `usage-blocks.json`, app
@@ -74,7 +75,21 @@ is faked behind `FlashHardware`.
   this computer via rodio, ALSA on Linux), `clock`, `liveliness` (1–5,
   default 3: the Device page's Animation silliness slider, sent as `lv`),
   `attention_anim` (`off`/`10s`/`30s`/`2m`, default `2m`, sent as `aa`
-  seconds), `pace_marker` (default off, sent as `pm`), `theme` (`system`, the
+  seconds), `pace_marker` (default off, sent as `pm`), `button_primary`
+  (default `space`), `button_secondary` (default `shift-tab`) and
+  `button_pwr` (default `brightness`): `none`, `space`, `shift-tab`, `tab`,
+  `enter`, `escape`, `brightness`, a media key (`play-pause`,
+  `previous-track`, `next-track`, `volume-down`, `volume-up`, `mute`) or a
+  shortcut, modifiers and a key joined by `+` with an optional `hold`
+  (`ctrl+shift+m`, `super+alt+k`, `ctrl+space hold`; `tap` marks one
+  that would read as a preset, `space tap`). `clawdmeter_core::buttons` has
+  the grammar, the key table and the keystroke→HID mapping; sent as
+  `k1`/`k2`/`k3`. The Device page's Controls field draws a keycap per button
+  the board has, in the order and under the names in `BoardInfo.buttons`
+  (checked against the firmware's `caps.cpp`, as is `pwr_button`); a
+  keycap opens its editor underneath, which records a shortcut from the
+  next key press.
+  `theme` (`system`, the
   default, or `solarized`: the OS-following themes in `themes::FOLLOWING`; a
   preset id from `themes::PRESETS`; or `custom`; the old default
   `clawd` and unknown values read as `system`) and `color_<token>`
@@ -92,7 +107,12 @@ is faked behind `FlashHardware`.
   window watches only while the Device page shows; the
   daemon hands changes to `Engine::set_appearance`, which sends them like any
   device setting), `claude_path`,
-  `release_repo`, `update_check`, `onboarding_done`, `alert_on` (alert kinds
+  `release_repo`, `update_check`, `skipped_update` (the app release tag the
+  Update page was told to skip), `skipped_firmware` (the firmware release
+  the Overview's "Skip this update" quiets: no nudge there and no Flash
+  badge; the Device page and the tray menu still offer it. Only a plain
+  version, `release_tag`, is nudged about or saved, since it comes from the
+  release's manifest), `onboarding_done`, `alert_on` (alert kinds
   the daemon lets through: the hook records `k` from `hook_event_name` /
   `notification_type` and `engine.on_attention` drops the rest; default all
   but `idle`).
@@ -196,14 +216,18 @@ Per account (`probe.rs`, `oauth.rs`):
   window is a `clawdmeter --window [PAGE]` child process.
 - `ui/app.rs` is the root: a sidebar (Overview, Device, Flash, Accounts,
   Hooks, Settings) or the setup wizard (`ui/setup.rs`) filling the window.
+  `Page::Update` has no sidebar item: the "Update available" pill
+  (`widgets::update_pill`) in the footer and beside the Settings heading
+  opens it.
   Pages are `crate::Page`; `Page::parse` also accepts the old
   `background`/`flasher`/`status`/`alerts` names.
 - The window saves settings through `ui::settings::write_settings`, which
   also queues `settings-changed` on `<state>/app-commands`; the tray (it
   takes the queue every 200 ms) forwards it as `Command::ReloadSettings`, so
   a device setting goes out within about a second. `Engine::next_write` sends
-  a changed `lv`/`aa`/`pm`/`th` or clock format (`tf`, off included) at once,
-  unless the numbers are stale (then it waits for the next good poll).
+  a changed `lv`/`aa`/`pm`/`k1`–`k3`/`th` or clock format (`tf`, off
+  included) at once, unless the numbers are stale (then it waits for the
+  next good poll).
   The 5 s re-read stays for hand edits and `--daemon` without a tray.
 - Only one window process runs (`<state>/window.lock`). The tray, or a second
   `--window` launch, appends `show <page>` to `<state>/window-commands`; the
@@ -212,6 +236,37 @@ Per account (`probe.rs`, `oauth.rs`):
 - Nothing competes for the serial port: the flasher (`ui/flasher.rs`) touches
   USB only while on screen (`set_active`), the Device page probes only while
   shown, and the sidebar locks while a board is being written.
+- App updates (`ui/update.rs`, `Page::Update`): when the daily check's tag
+  (`StatusSnapshot::app_update`, or the check's cache file with no tray) is
+  newer than a release build's version, the sidebar footer shows "Update
+  available" until that release is skipped (`skipped_update`; a later one
+  is announced again). It opens the Update page, which the same pill
+  beside the Settings heading opens too, a skipped release included:
+  the notes of every release up to the new one (`release::release_notes`,
+  Markdown drawn as headings, bullets and text), the download, "Skip this
+  update" and a link to the release page. The download takes this install's
+  package to `~/Downloads` (`release::fetch_app_package`; the package only
+  where installing it replaces the running copy, `AppPackage::for_install`:
+  `.dmg` from `/Applications/Clawdmeter.app`, `.msi` from its install
+  folder, `.deb` for a `/usr/bin/clawdmeter` that dpkg lists as its
+  package's, AppImage under `$APPIMAGE`; on x86_64 Linux the button is a
+  menu of the `.deb` and AppImage instead, `AppPackage::for_linux`, with the
+  detected one marked "This install"), fetched in 2 MB range requests
+  that are asked for again from the byte reached when one fails or stalls
+  (ureq has no idle timeout, only a cap per body), checks it against the
+  release's `SHA256SUMS`, marks it as
+  downloaded (macOS quarantine, Windows `Zone.Identifier`) and opens the
+  installer (a `.deb` or AppImage is shown in the file manager). The mark
+  makes Gatekeeper and SmartScreen treat it like a browser download: the
+  builds aren't notarized or signed, so the user approves each update (Open
+  Anyway / Run anyway). A verified copy already in the folder is reused as
+  it is. Other installs get a button to the release page. Builds without
+  `CLAWDMETER_VERSION` are never offered one, nor is a prerelease whose own
+  tag is published (the check stores that tag), and with `update_check` off
+  nothing is announced. Off screen the page re-reads the status and config
+  every 5 s, not every tick. The demo's `--app-update`
+  shows each download state with made-up notes (`linux`, `linux-menu`: the
+  Linux menu closed or open); clicking Download there fetches for real.
 - The wizard reuses the flasher (`FlashMode::Setup`: no step header,
   up-to-date boards can skip) and the Hooks page
   (`SettingsView::show(Page::Hooks, embedded)`). First run = no
@@ -226,7 +281,17 @@ Per account (`probe.rs`, `oauth.rs`):
   decorations and `ui::chrome` draws an Adwaita-style header bar. gpui 0.2.2
   reports "server" even with no decoration manager, so
   `decorations::wanted()` probes the Wayland registry itself.
-  `CLAWDMETER_DECORATIONS=client|server` overrides.
+  `CLAWDMETER_DECORATIONS=client|server` overrides. The bar's minimize,
+  maximize/restore and close buttons follow GNOME's `button-layout` (sides
+  and order), live: `platform::SettingWatch` follows it on a background
+  thread (one read, then `SettingChanged`, misses retried like the
+  appearance watch's), started before GPUI for client decorations or any
+  Wayland compositor (one offering server decorations may still answer
+  client-side); a window asking for client decorations waits up to 250 ms
+  for the first answer, else opens with GTK's default,
+  `menu:minimize,maximize,close`, and the root's 500 ms poll redraws when
+  it changes. `CLAWDMETER_BUTTON_LAYOUT=<layout>` overrides it (reference
+  screenshots; empty = unset, `:` = no buttons).
 - Board art is bundled by `ui::Assets` and drawn with
   `img(board.illustration())`. Use `img()`, not `svg()`: `svg()` renders a
   monochrome mask, `img()` renders the SVG through resvg in full colour.

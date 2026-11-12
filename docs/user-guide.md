@@ -196,9 +196,12 @@ account_labels = Personal, Work
 ```
 
 The first meter's label then shows the account's name instead of "Session"
-(where the panel is wide enough for it), and the BOOT button switches to the next account instead of sending Space. The
-account you choose stays shown, on the device and in the app, until you press
-the button again; the choice survives a restart. The device keeps the last
+(where the panel is wide enough for it), and a button set to **Switch
+account** shows the next account. In this fork that is the BOOT button's
+default; you can move it to another button, or give BOOT back its Space, in
+**Controls** on the Device page (see [Buttons](#buttons)). The account you
+choose stays shown, on the device and in the app, until you press the button
+again; the choice survives a restart. The device keeps the last
 numbers of every account, so the button also works while the computer is
 asleep or out of range.
 
@@ -217,9 +220,57 @@ which re-pair by a touch hold on that hint.
 
 | Button | Action |
 | --- | --- |
-| BOOT | Hold to send Space to the focused window, for Claude Code voice input. GPIO 0 on S3; GPIO 9 on C6. |
-| Secondary, where fitted | Send Shift+Tab to the focused window. S3 2.16: GPIO 18; C6 2.16: GPIO 10; LCD-1.54: GPIO 5. |
-| PWR, where software-controlled | Short press: brightness. Hold about 3 seconds and release: clear pairing. |
+| BOOT | By default, switch the account shown when several are configured; with one account, hold to send Space to the focused window, for Claude Code voice input. GPIO 0 on S3; GPIO 9 on C6. |
+| Secondary, where fitted | By default, send Shift+Tab to the focused window. S3 2.16: GPIO 18; C6 2.16: GPIO 10; LCD-1.54: GPIO 5. |
+| PWR, where software-controlled | Short press: by default, brightness. Hold about 3 seconds and release: clear pairing. |
+
+Each button can do something else. **Controls** on the app's Device page
+shows your board's buttons as keys, in the order they sit on it and under
+their names there (on the 2.16: Left, PWR, Right), each with what it does.
+Click one to change it:
+
+- **Keys**: send Space, Shift+Tab, Tab, Enter or Esc. Space is held while you
+  hold the button; the others are tapped once per press.
+- **Media**: Play/Pause, Previous, Next, Volume down, Volume up or Mute.
+  Volume repeats while you hold the button.
+- **Other**: **Switch account** shows the next Claude account when several
+  are configured (with one, the button does what it does in upstream: BOOT
+  Space, the second button Shift+Tab, PWR brightness); **Brightness** cycles
+  the screen brightness, so a board without a PWR button can have one;
+  **Nothing** leaves the button to wake the screen.
+- **Shortcut**: a keyboard shortcut of your own. Click the shortcut field
+  (or Record) and press the keys, such as Ctrl+Shift+M or Cmd+Shift+M for
+  Teams mute, Alt+A for Zoom, or Win+Alt+K for the Windows 11 microphone.
+  Escape is recorded like any other key; Cancel stops listening. Turn the
+  Ctrl, Shift, Alt and Cmd/Win/Super switches on or off afterwards for
+  shortcuts your system keeps to itself while recording. **Hold while
+  pressed** keeps the keys down while you hold the button, for push to talk
+  such as Teams' Ctrl+Space; otherwise they are tapped.
+
+PWR can only tap: a short press registers when you let go, so it has no
+Hold switch, and volume doesn't repeat on it. Holding PWR to clear the
+pairing works whatever its action. On boards without a touchscreen, the
+first press of BOOT (or of PWR, if it's the only button) during an alert
+dismisses the alert instead.
+
+The board sends key positions as on a US keyboard, and your computer reads
+them with its own layout. The app records the character a key types and
+sends the US key that types it, so recording is reliable on US-like layouts
+(QWERTY with US punctuation). On others, such as AZERTY or QWERTZ, some
+letters, digits and punctuation land on a different key: check the shortcut
+after recording it. The app says so when a key can't be sent, such as a
+letter that isn't on a US keyboard. Keypad digits are recorded as the digits
+above the letters.
+
+Media keys and F13–F24 came with a change to the board's Bluetooth keyboard
+description. After updating from older firmware, the board tells your
+computer when they next connect, so it reads the description again. If
+media keys or F13–F24 still do nothing, your computer kept the old
+description: forget Clawdmeter in your Bluetooth settings, clear the
+board's pairing (hold PWR about 3 seconds and release, or **Clear the
+board's pairing** on the Device page over USB) and pair it again. You only
+need to do this once. After going back to older firmware and updating again,
+re-pair the same way if the keys misbehave.
 
 The LCD-4 has one user button, BOOT. Its PWR key is a hardware reset.
 
@@ -233,7 +284,7 @@ seconds and preserves comments and unknown keys when saving.
 
 | Key | Default | Effect |
 | --- | --- | --- |
-| `config_dirs` | `~/.claude` | Comma-separated Claude Code config folders. The app selects the account whose usage increased most recently (session usage, or weekly usage on an account with no 5-hour limit); before any rise, the one with the highest percentage. `CLAUDE_CONFIG_DIR` supplies the default when this key is absent. With more than one folder, the device's BOOT button switches the account shown (see [Several accounts](#several-accounts)). |
+| `config_dirs` | `~/.claude` | Comma-separated Claude Code config folders. The app selects the account whose usage increased most recently (session usage, or weekly usage on an account with no 5-hour limit); before any rise, the one with the highest percentage. `CLAUDE_CONFIG_DIR` supplies the default when this key is absent. With more than one folder, a button set to Switch account (BOOT by default) switches the account shown (see [Several accounts](#several-accounts)). |
 | `account_labels` | folder names | Comma-separated names for the accounts, in `config_dirs` order, shown on the device as the first meter's label. At most 10 ASCII characters each; a blank entry keeps the folder name (`.claude-work` shows as `claude-wor`). |
 | `reset_chime` | `off` | Chime on the device when the session usage resets (boards with a speaker). The older `chime` key still works. |
 | `alert_chime` | `off` | Chime on the device when Claude needs you (boards with a speaker). The older `beep` key still works. |
@@ -247,7 +298,9 @@ seconds and preserves comments and unknown keys when saving.
 | `poll_interval` | automatic | Override working and no-hooks polling intervals, in seconds. The scheduler enforces at least 120 seconds per account. Quiet and other-account schedules still apply. |
 | `heartbeat_interval` | `60` | Resend cached readings between usage checks. This does not fetch usage. Keep the default unless diagnosing the connection. |
 | `claude_path` | found on `PATH` | Full path to the Claude Code executable, if detection fails. |
-| `update_check` | `on` | Check for firmware releases daily. |
+| `update_check` | `on` | Check for firmware and app releases daily. |
+| `skipped_update` | unset | The app release you chose to skip, such as `v2.5.0`. The sidebar stops mentioning it; a later release is announced again. |
+| `skipped_firmware` | unset | The firmware release you skipped on the Overview, such as `v2.5.0`. The Overview and the Flash item stop mentioning it; the Device page and the tray menu still offer it, and a later release is announced again. |
 | `alert_on` | `permission, question, elicitation` | Which waits alert on the device and tray: `permission`, `question`, `idle`, `elicitation` (MCP input), or `none`. Set on the Hooks page. Other notification types follow `permission`. |
 | `release_repo` | `HermannBjorgvin/Clawdmeter` | GitHub repository used for firmware releases. |
 | `onboarding_done` | unset | `true` after setup is finished or skipped. |
@@ -310,7 +363,7 @@ the selected reading is stale, allowing the device to show the loss of fresh dat
 clawdmeter                      Run the tray app
 clawdmeter --daemon             Run without a tray or window
 clawdmeter --once               Read usage once and print the payload; no Bluetooth
-clawdmeter --window [PAGE]       Open overview, device, flash, accounts, hooks, settings, or setup
+clawdmeter --window [PAGE]       Open overview, device, flash, accounts, hooks, settings, update, or setup
 clawdmeter --ports              List attached Espressif USB ports
 clawdmeter --info PORT          Read the board and firmware version over USB
 clawdmeter hook MODE [event]    Handle a Claude Code hook: alert, clear, or event

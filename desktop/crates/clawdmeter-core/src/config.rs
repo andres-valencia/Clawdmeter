@@ -11,6 +11,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub use crate::buttons::{Button, ButtonAction};
 use crate::paths::Paths;
 use crate::platform::Appearance;
 use crate::themes::{self, FollowTheme, ThemePreset};
@@ -447,6 +448,12 @@ pub struct Settings {
     pub claude_path: Option<PathBuf>,
     /// Daily firmware update check (default on).
     pub update_check: bool,
+    /// The app release the user chose not to be told about (`skipped_update`,
+    /// a tag like `v2.5.0`); a later release is announced again.
+    pub skipped_update: Option<String>,
+    /// The firmware release the user chose not to be nudged about on the
+    /// Overview (`skipped_firmware`, a tag); a later release nudges again.
+    pub skipped_firmware: Option<String>,
     /// Which kinds of "Claude needs you" alert reach the device and tray.
     pub alert_on: AlertOn,
     /// How lively Clawd is on the device (`lv`, 1-5, default 3).
@@ -455,6 +462,10 @@ pub struct Settings {
     pub attention_anim: AttentionAnim,
     /// Pace marker on the device's usage bars (`pm`, default off).
     pub pace_marker: bool,
+    /// What the device's primary, secondary and PWR buttons do, by
+    /// [`Button::index`] (`button_primary`, `button_secondary`, `button_pwr`;
+    /// sent as `k1`, `k2`, `k3`).
+    pub buttons: [ButtonAction; 3],
     /// Which colours the device uses (`theme`); [`Settings::colors`] is
     /// the palette it gets as `th`, given the OS's appearance.
     pub theme: DeviceTheme,
@@ -607,10 +618,15 @@ impl Settings {
                 .to_owned(),
             claude_path: cfg.get("claude_path").filter(|s| !s.is_empty()).map(|s| paths.expand_tilde(s)),
             update_check: on_off(cfg.get("update_check"), true),
+            skipped_update: cfg.get("skipped_update").filter(|s| !s.is_empty()).map(str::to_owned),
+            skipped_firmware: cfg.get("skipped_firmware").filter(|s| !s.is_empty()).map(str::to_owned),
             alert_on: cfg.get("alert_on").map(AlertOn::parse).unwrap_or_default(),
             liveliness: cfg.get("liveliness").map(parse_liveliness).unwrap_or(DEFAULT_LIVELINESS),
             attention_anim: cfg.get("attention_anim").map(AttentionAnim::parse).unwrap_or_default(),
             pace_marker: on_off(cfg.get("pace_marker"), false),
+            buttons: Button::ALL.map(|b| {
+                cfg.get(b.config_key()).map_or(b.default_action(), |v| ButtonAction::parse(v, b.default_action()))
+            }),
             theme: cfg.get("theme").map(DeviceTheme::parse).unwrap_or_default(),
             custom_colors: {
                 let mut p: Option<Palette> = None;
@@ -719,6 +735,18 @@ impl Settings {
         if current.update_check != self.update_check {
             cfg.set("update_check", oo(self.update_check));
         }
+        if current.skipped_update != self.skipped_update {
+            match &self.skipped_update {
+                Some(tag) => cfg.set("skipped_update", tag),
+                None => cfg.remove("skipped_update"),
+            }
+        }
+        if current.skipped_firmware != self.skipped_firmware {
+            match &self.skipped_firmware {
+                Some(tag) => cfg.set("skipped_firmware", tag),
+                None => cfg.remove("skipped_firmware"),
+            }
+        }
         if current.alert_on != self.alert_on {
             cfg.set("alert_on", &self.alert_on.as_config());
         }
@@ -727,6 +755,12 @@ impl Settings {
         }
         if current.attention_anim != self.attention_anim {
             cfg.set("attention_anim", self.attention_anim.as_str());
+        }
+        for b in Button::ALL {
+            let a = self.buttons[b.index()];
+            if current.buttons[b.index()] != a {
+                cfg.set(b.config_key(), &a.as_str());
+            }
         }
         if current.theme != self.theme {
             if self.theme == DeviceTheme::default() {
@@ -891,6 +925,10 @@ mod tests {
         assert!(s.alert_chime && s.desktop_chime);
         assert_eq!(settings("clock = weird").clock, ClockMode::Off);
         assert!(settings("").update_check);
+        assert_eq!(settings("").skipped_update, None);
+        assert_eq!(settings("skipped_update = v2.5.0").skipped_update.as_deref(), Some("v2.5.0"));
+        assert_eq!(settings("").skipped_firmware, None);
+        assert_eq!(settings("skipped_firmware = v2.5.0").skipped_firmware.as_deref(), Some("v2.5.0"));
         assert_eq!(settings("").release_repo, DEFAULT_RELEASE_REPO);
         assert_eq!(settings("release_repo = me/fork").release_repo, "me/fork");
         assert_eq!(settings("release_repo = nonsense").release_repo, DEFAULT_RELEASE_REPO);
@@ -912,6 +950,28 @@ mod tests {
         s.apply_to(&mut cfg, &paths());
         assert_eq!(cfg.get("liveliness"), Some("1"));
         assert_eq!(Settings::from_config(&cfg, &paths(), None).liveliness, 1);
+    }
+
+    #[test]
+    fn button_actions() {
+        use crate::buttons::{KeyChord, MediaKey, MOD_CTRL, MOD_SHIFT};
+        let s = settings("");
+        assert_eq!(s.buttons, [ButtonAction::Account, ButtonAction::ShiftTab, ButtonAction::Brightness]);
+        let s = settings("button_primary = Enter\nbutton_secondary = none\nbutton_pwr = ctrl+shift+m hold\n");
+        let teams = KeyChord { mods: MOD_CTRL | MOD_SHIFT, usage: 0x10, hold: true };
+        assert_eq!(s.buttons, [ButtonAction::Enter, ButtonAction::None, ButtonAction::Chord(teams)]);
+        let s = settings("button_primary = bogus\nbutton_secondary = ctrl+\nbutton_pwr = shift+hyper\n");
+        assert_eq!(s.buttons, Button::ALL.map(Button::default_action), "unknown values read as the default");
+        let mut cfg = ConfigFile::default();
+        let mut s = settings("");
+        s.apply_to(&mut cfg, &paths());
+        assert!(cfg.get("button_primary").is_none(), "the default stays out of the file");
+        s.buttons = [ButtonAction::Escape, ButtonAction::Media(MediaKey::VolumeUp), ButtonAction::Chord(teams)];
+        s.apply_to(&mut cfg, &paths());
+        assert_eq!(cfg.get("button_primary"), Some("escape"));
+        assert_eq!(cfg.get("button_secondary"), Some("volume-up"));
+        assert_eq!(cfg.get("button_pwr"), Some("ctrl+shift+m hold"));
+        assert_eq!(Settings::from_config(&cfg, &paths(), None).buttons, s.buttons);
     }
 
     #[test]
