@@ -24,7 +24,7 @@ on:
       version:
         description: Version the app reports (no leading v)
         required: true
-        default: 2.3.3-accounts.1
+        default: 2.4.0-accounts.2
 
 permissions:
   contents: read
@@ -35,7 +35,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  CLAWDMETER_VERSION: ${{ inputs.version || '2.3.3-accounts.1' }}
+  CLAWDMETER_VERSION: ${{ inputs.version || '2.4.0-accounts.2' }}
 
 jobs:
   windows:
