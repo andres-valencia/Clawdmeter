@@ -48,6 +48,29 @@ an upgrade. `nix develop` gives a shell with Rust, PlatformIO and the Linux
 libraries.
 
 Launch Clawdmeter to open setup. It stays in the tray or macOS menu bar.
+Its menu shows what the device shows: the link, the account, and each usage
+meter with its reset countdown (one **Spend** meter on a spend-capped
+account). On macOS the top of the menu draws them as on
+the device, with Clawd and the bars (and the pace marker when it's on), and
+**Show usage in the menu bar** in Settings puts the higher of the session
+and weekly percentages beside the icon. The reload button in the corner of
+the macOS menu checks usage now and keeps the menu open while it does; it's
+dimmed while a check can't run yet (its tooltip says when it can). The
+bottom row has **Open Clawdmeter** and, on the right, an update icon with an
+orange dot while a newer release is out (it opens **Update** to install the
+new app first, then **Flash** for the board's firmware; skip the app's
+release and it stays hidden until the next one), a speaker
+that turns the chime on this computer on or off (the Overview's **Play a
+chime on this computer** switch), Settings, and a power icon that quits.
+The board's own alert chime isn't in the tray menu: switch it with **Alert
+chime** on the Device page. On Linux and Windows the menu lists **Refresh
+usage** (greyed out, saying when it can check again, until a check can run),
+**Chime on this computer** (checked while the Overview's switch is on;
+clicking it flips that switch), **Open Clawdmeter**, **Settings…**,
+**Update Clawdmeter to v…** or **Update firmware to v…** and **Quit
+Clawdmeter** instead, with the same conditions. With the pace marker on,
+their usage rows end with the marker's verdict: *on pace*, *ahead of pace*
+or *at the limit*.
 Without a tray, it uses a window; closing that window quits the app.
 You can skip setup and return through **Run setup again** in Settings.
 
@@ -154,6 +177,40 @@ limit goes. For these accounts the reset chime and Clawd's fresh-window jump
 mark the weekly reset. Firmware older than this change keeps showing the
 session as not started; update it from the Flash page.
 
+Accounts with a Fable weekly limit get a purple strip at the left end of
+the **Weekly** bar, on the device, the Overview page and the macOS tray
+menu. The device draws it in the chosen theme's own purple (**Fable** under
+**Custom +**); the Overview and the tray, like their other meters, use the
+Dark or Light theme's, whichever matches your computer's light or dark
+appearance. Fable's limit is half the weekly limit, so the strip grows to the middle of the
+bar as Fable is used: when it reaches the middle, Fable is used up for the
+week, while the rest of the bar still shows the overall weekly usage. Its
+right end is straight; it never runs past the weekly fill, and it fills
+all of it when Fable is all you used (within a point and a half, since the
+two numbers are rounded separately). On the device it waits until the fill
+is wider than its rounded ends. While you work through a 5-hour window the
+quick usage check rarely reports Fable, so the strip can trail the weekly
+fill until the next full usage reading, near the end of that window at the
+latest. With no Fable reading yet there's no strip. The e-paper board
+doesn't draw it.
+
+**Codex accounts (a trial).** With the Codex CLI signed in to ChatGPT, its
+folder (`~/.codex`, or `$CODEX_HOME`) is picked up as an account on its own;
+the Accounts page's **Add account folder…** takes other Codex folders too (a
+folder with an `auth.json` is Codex, anything else Claude Code). A Codex
+account is shown once its own usage rises and stays until another account's
+does; until then a Claude account comes first, whatever the percentages. The
+device then draws white bars with a **Codex** pill and, on a weekly-only plan
+such as the $100 Pro plan, a **Resets expire** card: the count of reset
+credits still held beside a ticket, and each one's expiry date, soonest
+first and highlighted (up to six on the largest panels; past that, "+N
+more"). The Overview shows the same card, the macOS menu-bar panel a row of
+up to four dates under the meter, and the Linux and Windows tray menus one
+line, such as "3 resets · next expires Nov 30". Clawd stays as he is: his
+reactions follow Claude Code's hooks, and Codex numbers don't touch his mood
+or the reset chime. With no Codex folder, nothing about Codex is polled or
+shown beyond the trial note on the Accounts page.
+
 The device boots to the meters. Clawd performs his shows right on them,
 in front of the panels. Tap a show or the screensaver to send him back to
 his seat.
@@ -168,7 +225,7 @@ A tap or the device's two-minute timeout dismisses the alert on the device
 and tells the app to clear it from the tray too. Answering also clears the
 alert through hooks. Uncleared app alerts expire after 2 minutes too; test
 alerts expire after 30 seconds. C6 boards show the message without the
-full-size Clawd. Optional alert and reset chimes work on boards with an implemented audio output; those boards also ding once when they start.
+full-size Clawd. Optional alert and reset chimes work on boards with an implemented audio output; boards with a speaker also ding once when they start. Boards with a plain on/off buzzer (LCD-4 V4.0, LCD-2.1, LCD-2.8C) can't play the ding: they beep three times instead, and once when they start.
 Boards with the **minimal display** capability keep the meters and a still
 Clawd, with no animated scenes. This is a board capability, not a user setting.
 C6 boards have no room for the full-size Clawd: their shows are acts in his
@@ -180,7 +237,8 @@ reading, and **Stale** when the retained reading is old. The verbs are a
 healthy-status indicator, not a report of an active model request. While
 connected but waiting for fresh data, the status alternates with **Listening**. Minimal display uses fixed status text.
 
-If updates stop, the meters dim. The last reading is retained rather than
+If updates stop, the meters dim (on the e-paper board they stay black and
+the status line says **Stale**). The last reading is retained rather than
 replaced with zero. See [Clawd's director](clawd-director.md) for timing
 and character rules.
 
@@ -286,15 +344,17 @@ seconds and preserves comments and unknown keys when saving.
 | --- | --- | --- |
 | `config_dirs` | `~/.claude` | Comma-separated Claude Code config folders. The app selects the account whose usage increased most recently (session usage, or weekly usage on an account with no 5-hour limit); before any rise, the one with the highest percentage. `CLAUDE_CONFIG_DIR` supplies the default when this key is absent. With more than one folder, a button set to Switch account (BOOT by default) switches the account shown (see [Several accounts](#several-accounts)). |
 | `account_labels` | folder names | Comma-separated names for the accounts, in `config_dirs` order, shown on the device as the first meter's label. At most 10 ASCII characters each; a blank entry keeps the folder name (`.claude-work` shows as `claude-wor`). |
-| `reset_chime` | `off` | Chime on the device when the session usage resets (boards with a speaker). The older `chime` key still works. |
-| `alert_chime` | `off` | Chime on the device when Claude needs you (boards with a speaker). The older `beep` key still works. |
+| `reset_chime` | `off` | Play a chime or buzzer on devices with supported hardware, when the session usage resets. The older `chime` key still works. |
+| `alert_chime` | `off` | Play a chime or buzzer on devices with supported hardware, when Claude needs you. The older `beep` key still works. |
 | `desktop_chime` | `off` | Play the same chime on this computer when Claude needs you. Follows `alert_on`. |
 | `clock` | `off` | `auto`, `12`, or `24` replaces the device's Usage title with a clock. |
 | `liveliness` | `3` | How lively Clawd is, `1` (No-nonsense) to `5` (All-nonsense). Set with **Animation silliness** on the Device page. |
 | `attention_anim` | `2m` | How long Clawd points and waves for an alert: `off`, `10s`, `30s` or `2m`. The alert itself is unchanged. Set with **Attention animation** on the Device page. |
 | `pace_marker` | `off` | `on` marks the elapsed share of each usage window on the device's bars and colours them by pace. Set with **Pace marker** on the Device page. |
+| `menu_bar_usage` | `off` | macOS: `on` shows the higher of the session and weekly percentages beside the menu bar icon (spend, on a spend-capped account), so the limit closest to stopping you. Set with **Show usage in the menu bar** on the Settings page. |
 | `theme` | `system` | The device's colours, Clawd's included: `system` (Dark or Light, following this computer's light or dark mode, and switching when it does; `clawd`, the old default, means the same), `dark` (the board's own palette), `light`, `catppuccin_mocha`, `dracula`, `gruvbox`, `monokai`, `nord`, `one_dark`, `solarized` (Solarized Dark or Light, following the mode like `system`), `solarized_dark`, `solarized_light`, `tokyo_night`, or `custom` for the `color_*` keys below. Set with **Colors** on the Device page. |
-| `color_<name>` | the default palette | The custom theme's colours as `rrggbb` (no `#`, which starts a comment): `color_bg`, `color_panel`, `color_text`, `color_dim`, `color_accent`, `color_green`, `color_amber`, `color_red`, `color_bar_bg`, `color_clawd`, `color_eye`. Used only with `theme = custom` and kept while a preset is chosen. Set with **Custom +** under **Colors** on the Device page (a swatch or a typed hex code). The first time, Custom starts from the theme you're on and writes all eleven keys; from then on it keeps its own colours. |
+| `color_<name>` | the default palette | The custom theme's colours as `rrggbb` (no `#`, which starts a comment): `color_bg`, `color_panel`, `color_text`, `color_dim`, `color_accent`, `color_green`, `color_amber`, `color_red`, `color_bar_bg`, `color_clawd`, `color_eye`, `color_fable` (the Fable strip in the weekly bar). Used only with `theme = custom` and kept while a preset is chosen. Set with **Custom +** under **Colors** on the Device page (a swatch or a typed hex code). The first time, Custom starts from the theme you're on and writes all twelve keys; from then on it keeps its own colours. A custom theme saved before `color_fable` existed starts it at the Dark theme's violet. |
+| `codex_dirs` | `~/.codex` when signed in | Comma-separated Codex folders (a trial). Absent: the Codex CLI's folder (`$CODEX_HOME`, else `~/.codex`) when it has an `auth.json`; empty: none. |
 | `poll_interval` | automatic | Override working and no-hooks polling intervals, in seconds. The scheduler enforces at least 120 seconds per account. Quiet and other-account schedules still apply. |
 | `heartbeat_interval` | `60` | Resend cached readings between usage checks. This does not fetch usage. Keep the default unless diagnosing the connection. |
 | `claude_path` | found on `PATH` | Full path to the Claude Code executable, if detection fails. |
@@ -305,8 +365,6 @@ seconds and preserves comments and unknown keys when saving.
 | `release_repo` | `HermannBjorgvin/Clawdmeter` | GitHub repository used for firmware releases. |
 | `onboarding_done` | unset | `true` after setup is finished or skipped. |
 
-**Mute chimes** in the tray silences the alert chime and the desktop chime
-until the app restarts.
 
 The tray app writes `daemon.log` in the state folder and keeps the previous
 run as `daemon.log.1`. **Settings** links to the log and config file.
@@ -351,6 +409,18 @@ Linux, verified; `~/Library/Application Support/Claude/claude-code` on macOS
 and `%APPDATA%\Claude\claude-code` on Windows, from the desktop app's code).
 Settings → Advanced and the Accounts page say which one is in use. Without
 Claude Code, usage still updates every 12 minutes from the usage endpoint.
+
+A Codex account is read from the endpoint the Codex CLI uses
+(`chatgpt.com/backend-api/wham/usage`) with the sign-in in its `auth.json`,
+which Clawdmeter only reads and never refreshes: an expired or refused one is
+no data until Codex renews it (the account drops off the device meanwhile). The reset credits' expiry dates come
+from one more read-only call the CLI makes, at most hourly. When the
+endpoint doesn't answer (it is slow, so the wait is 30 seconds), the newest
+usage record in the CLI's session logs stands in, but only one under an hour
+old, newer than the endpoint's last answer, and whose window hasn't reset
+since. The shown Codex account is checked every
+5 minutes, others every 10; a rate-limited answer pauses it ("Usage paused by
+OpenAI until HH:MM").
 
 Every trigger, including manual refresh, respects a two-minute minimum gap
 and any retry delay. Transient failures delay retries by 10, 20, then 30

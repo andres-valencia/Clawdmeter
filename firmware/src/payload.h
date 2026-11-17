@@ -26,6 +26,10 @@
 //   al  that account's name                         o   the others: an array of
 //       {i, l, s, sr, w, wr, acct, tp, pd, rd}, the same meaning per account;
 //       at most ACCT_OTHERS_MAX are kept, entries without `i` are skipped
+//   pv  "codex" = an OpenAI Codex account (a trial): the Codex screen
+//   rc  Codex reset credits held (0-999, -1 absent)
+//   rx  each held credit's expiry date ("Dec 1"), soonest first, at most 10
+//       (resets_expiry_n -1 absent)
 //
 // Returns false on malformed JSON; `*err` (if non-null) then points at a
 // static description. `out` is fully overwritten on success, untouched on

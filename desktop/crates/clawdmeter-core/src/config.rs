@@ -233,8 +233,10 @@ impl AttentionAnim {
     }
 }
 
-/// One of the device's UI colours, in the order the payload's `th` carries
-/// them (`firmware/src/theme_palette.h`).
+/// One of the device's UI colours: the eleven the payload's `th` carries, in
+/// its order (`firmware/src/theme_palette.h`), then the Fable overlay's,
+/// which goes out on its own as `fc` so `th` stays the length older firmware
+/// accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorToken {
     /// Screen background.
@@ -259,11 +261,30 @@ pub enum ColorToken {
     Clawd,
     /// The screensaver face's eyes.
     Eye,
+    /// The Fable overlay in the weekly bar (`fc`, not part of `th`).
+    Fable,
 }
 
 impl ColorToken {
-    /// Every token, in `th` order (also the Device page's order).
-    pub const ALL: [ColorToken; 11] = [
+    /// Every token: `th`'s eleven in order, then Fable (also the Device
+    /// page's order).
+    pub const ALL: [ColorToken; 12] = [
+        ColorToken::Bg,
+        ColorToken::Panel,
+        ColorToken::Text,
+        ColorToken::Dim,
+        ColorToken::Accent,
+        ColorToken::Green,
+        ColorToken::Amber,
+        ColorToken::Red,
+        ColorToken::BarBg,
+        ColorToken::Clawd,
+        ColorToken::Eye,
+        ColorToken::Fable,
+    ];
+
+    /// The tokens `th` carries.
+    pub const TH: [ColorToken; 11] = [
         ColorToken::Bg,
         ColorToken::Panel,
         ColorToken::Text,
@@ -291,6 +312,7 @@ impl ColorToken {
             ColorToken::BarBg => "color_bar_bg",
             ColorToken::Clawd => "color_clawd",
             ColorToken::Eye => "color_eye",
+            ColorToken::Fable => "color_fable",
         }
     }
 
@@ -308,6 +330,7 @@ impl ColorToken {
             ColorToken::BarBg => "Bar track",
             ColorToken::Clawd => "Clawd",
             ColorToken::Eye => "Face eyes",
+            ColorToken::Fable => "Fable",
         }
     }
 
@@ -316,15 +339,17 @@ impl ColorToken {
         Palette::default().get(self)
     }
 
-    /// Its place in `th`: the variants are declared in [`Self::ALL`]'s order.
+    /// Its place in [`Palette`] (and `th`): the variants are declared in
+    /// [`Self::ALL`]'s order.
     fn index(self) -> usize {
         self as usize
     }
 }
 
-/// The device's colours (`color_*` keys, sent as `th`).
+/// The device's colours (`color_*` keys): [`ColorToken::TH`]'s eleven are
+/// sent as `th`, Fable's as `fc`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Palette([u32; 11]);
+pub struct Palette([u32; 12]);
 
 impl Default for Palette {
     fn default() -> Self {
@@ -333,8 +358,8 @@ impl Default for Palette {
 }
 
 impl Palette {
-    /// From eleven 0xRRGGBB colours in [`ColorToken::ALL`] order.
-    pub const fn new(colors: [u32; 11]) -> Self {
+    /// From twelve 0xRRGGBB colours in [`ColorToken::ALL`] order.
+    pub const fn new(colors: [u32; 12]) -> Self {
         Palette(colors)
     }
 
@@ -348,15 +373,32 @@ impl Palette {
         self.0[t.index()] = rgb & 0xff_ffff;
     }
 
-    /// The payload's `th`: every colour as 6 lower-case hex digits, run together.
+    /// The payload's `th`: [`ColorToken::TH`]'s colours as 6 lower-case hex
+    /// digits each, run together (66 digits; Fable's isn't one of them).
     pub fn to_hex(&self) -> String {
-        self.0.iter().map(|c| format!("{c:06x}")).collect()
+        ColorToken::TH.iter().map(|&t| format!("{:06x}", self.get(t))).collect()
+    }
+
+    /// The payload's `fc`: Fable's colour.
+    pub fn fable(&self) -> Rgb {
+        Rgb(self.get(ColorToken::Fable))
     }
 }
 
+/// Serialized as `th` ([`Palette::to_hex`]).
 impl serde::Serialize for Palette {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_hex())
+    }
+}
+
+/// One 0xRRGGBB colour, serialized as six lower-case hex digits (`fc`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rgb(pub u32);
+
+impl serde::Serialize for Rgb {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&format!("{:06x}", self.0 & 0xff_ffff))
     }
 }
 
@@ -425,6 +467,14 @@ pub struct Settings {
     /// Short names for the accounts, in `config_dirs` order
     /// (`account_labels`). The device shows them when there are several.
     pub account_labels: Vec<String>,
+    /// Codex homes to poll (accounts, a trial: [`crate::codex`]). With no
+    /// `codex_dirs` key, the default Codex home when it has a sign-in
+    /// ([`Settings::load`]); an empty key is none.
+    pub codex_dirs: Vec<PathBuf>,
+    /// The default Codex home found at load (`$CODEX_HOME` or `~/.codex`
+    /// with an `auth.json`): what no `codex_dirs` key means, so saving an
+    /// unchanged list doesn't pin it into the file.
+    pub codex_default: Option<PathBuf>,
     /// `/usage` poll interval while a session is working (s, >= 10).
     pub poll_interval: u64,
     /// True when `poll_interval` came from the file or the env var, in which
@@ -462,6 +512,9 @@ pub struct Settings {
     pub attention_anim: AttentionAnim,
     /// Pace marker on the device's usage bars (`pm`, default off).
     pub pace_marker: bool,
+    /// The main meter's percentage beside the macOS menu bar icon
+    /// (`menu_bar_usage`, default off).
+    pub menu_bar_usage: bool,
     /// What the device's primary, secondary and PWR buttons do, by
     /// [`Button::index`] (`button_primary`, `button_secondary`, `button_pwr`;
     /// sent as `k1`, `k2`, `k3`).
@@ -602,6 +655,14 @@ impl Settings {
         Settings {
             config_dirs: parse_config_dirs(cfg.get("config_dirs"), paths),
             account_labels: parse_account_labels(cfg.get("account_labels")),
+            codex_dirs: {
+                // A folder listed as both is a Claude account.
+                let claude = parse_config_dirs(cfg.get("config_dirs"), paths);
+                let mut v = parse_dir_list(cfg.get("codex_dirs").unwrap_or(""), paths);
+                v.retain(|d| !claude.contains(d));
+                v
+            },
+            codex_default: None,
             poll_interval,
             poll_interval_explicit: file_poll.is_some() || env_default.is_some(),
             heartbeat_interval,
@@ -624,6 +685,7 @@ impl Settings {
             liveliness: cfg.get("liveliness").map(parse_liveliness).unwrap_or(DEFAULT_LIVELINESS),
             attention_anim: cfg.get("attention_anim").map(AttentionAnim::parse).unwrap_or_default(),
             pace_marker: on_off(cfg.get("pace_marker"), false),
+            menu_bar_usage: on_off(cfg.get("menu_bar_usage"), false),
             buttons: Button::ALL.map(|b| {
                 cfg.get(b.config_key()).map_or(b.default_action(), |v| ButtonAction::parse(v, b.default_action()))
             }),
@@ -663,7 +725,28 @@ impl Settings {
         let env = std::env::var("POLL_INTERVAL").ok();
         let mut s = Self::from_config(&cfg, paths, env.as_deref());
         s.apply_env_config_dir(&cfg, paths, std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref());
+        s.discover_codex(&cfg, paths, std::env::var("CODEX_HOME").ok().as_deref());
         Ok(s)
+    }
+
+    /// [`Settings::apply_codex_default`] with the default Codex home found on
+    /// this machine (`codex_home` is `$CODEX_HOME`). Every path that loads
+    /// settings to save them again goes through this, so the default is
+    /// known when the list is edited.
+    pub fn discover_codex(&mut self, cfg: &ConfigFile, paths: &Paths, codex_home: Option<&str>) {
+        self.apply_codex_default(cfg, crate::codex::discover(&paths.home, codex_home));
+    }
+
+    /// The default Codex home (found by [`crate::codex::discover`]) is an
+    /// account unless the file lists Codex homes itself (`codex_dirs`, empty
+    /// for none). With no Codex home, nothing is polled and no Codex UI shows.
+    pub fn apply_codex_default(&mut self, cfg: &ConfigFile, found: Option<PathBuf>) {
+        self.codex_default = found;
+        if cfg.get("codex_dirs").is_none() {
+            self.codex_dirs = self.codex_default.iter().cloned().collect();
+        }
+        let claude = &self.config_dirs;
+        self.codex_dirs.retain(|d| !claude.contains(d));
     }
 
     /// With no `config_dirs` in the file, a `CLAUDE_CONFIG_DIR` in the
@@ -684,19 +767,27 @@ impl Settings {
     /// from what the file already says (so a hand-written `reset_chime = off` stays
     /// as written and absent keys at their defaults stay absent).
     pub fn apply_to(&self, cfg: &mut ConfigFile, paths: &Paths) {
-        let current = Settings::from_config(cfg, paths, None);
-        if current.config_dirs != self.config_dirs {
-            let home = &paths.home;
-            let list: Vec<String> = self
-                .config_dirs
-                .iter()
+        let mut current = Settings::from_config(cfg, paths, None);
+        current.apply_codex_default(cfg, self.codex_default.clone());
+        let home = &paths.home;
+        let list = |dirs: &[PathBuf]| -> String {
+            dirs.iter()
                 .map(|d| match d.strip_prefix(home) {
                     Ok(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
                     Ok(rest) => format!("~/{}", rest.to_string_lossy().replace('\\', "/")),
                     Err(_) => d.to_string_lossy().into_owned(),
                 })
-                .collect();
-            cfg.set("config_dirs", &list.join(", "));
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        if current.config_dirs != self.config_dirs {
+            cfg.set("config_dirs", &list(&self.config_dirs));
+        }
+        // Only a change is written: the default Codex home stays implicit
+        // until the list is edited, and then `codex_dirs =` (empty) keeps a
+        // removed default from coming back.
+        if current.codex_dirs != self.codex_dirs {
+            cfg.set("codex_dirs", &list(&self.codex_dirs));
         }
         if current.poll_interval != self.poll_interval {
             cfg.set("poll_interval", &self.poll_interval.to_string());
@@ -706,12 +797,13 @@ impl Settings {
         }
         let oo = |b: bool| if b { "on" } else { "off" };
         // A changed chime is written under its new name; the old one goes.
-        // The pace marker rides along (it has no old name).
+        // The other switches ride along (they have no old name).
         for (key, old, now, was) in [
             ("reset_chime", "chime", self.reset_chime, current.reset_chime),
             ("alert_chime", "beep", self.alert_chime, current.alert_chime),
             ("desktop_chime", "", self.desktop_chime, current.desktop_chime),
             ("pace_marker", "", self.pace_marker, current.pace_marker),
+            ("menu_bar_usage", "", self.menu_bar_usage, current.menu_bar_usage),
         ] {
             if now != was {
                 cfg.set(key, oo(now));
@@ -769,7 +861,7 @@ impl Settings {
                 cfg.set("theme", self.theme.as_str());
             }
         }
-        // All eleven, default or not: their presence is how a later run knows
+        // All twelve, default or not: their presence is how a later run knows
         // Custom has colours of its own (`choose_custom`).
         if current.custom_colors != self.custom_colors {
             for t in ColorToken::ALL {
@@ -782,10 +874,14 @@ impl Settings {
     }
 }
 
+/// A comma list of folders, `~` expanded, blanks dropped.
+pub fn parse_dir_list(raw: &str, paths: &Paths) -> Vec<PathBuf> {
+    raw.split(',').map(str::trim).filter(|s| !s.is_empty()).map(|s| paths.expand_tilde(s)).collect()
+}
+
 /// `config_dirs`: comma list, `~` expanded, blanks dropped; default `[~/.claude]`.
 pub fn parse_config_dirs(raw: Option<&str>, paths: &Paths) -> Vec<PathBuf> {
-    let dirs: Vec<PathBuf> =
-        raw.unwrap_or("").split(',').map(str::trim).filter(|s| !s.is_empty()).map(|s| paths.expand_tilde(s)).collect();
+    let dirs = parse_dir_list(raw.unwrap_or(""), paths);
     if dirs.is_empty() {
         vec![paths.home.join(".claude")]
     } else {
@@ -891,6 +987,67 @@ mod tests {
             vec![PathBuf::from("/home/u/.claude"), PathBuf::from("/home/u/.claude-work")]
         );
         assert_eq!(settings("config_dirs = , ,\n").config_dirs, vec![PathBuf::from("/home/u/.claude")]);
+    }
+
+    // Codex accounts: the default Codex home with no key, the list once
+    // there is one (empty: none). With no Codex home, none at all.
+    #[test]
+    fn codex_dirs() {
+        let p = paths();
+        let codex = PathBuf::from("/home/u/.codex");
+        let load = |text: &str, found: Option<PathBuf>| {
+            let cfg = ConfigFile::parse(text);
+            let mut s = Settings::from_config(&cfg, &p, None);
+            s.apply_codex_default(&cfg, found);
+            s
+        };
+        assert_eq!(load("", None).codex_dirs, Vec::<PathBuf>::new(), "no Codex home: nothing");
+        assert_eq!(load("", Some(codex.clone())).codex_dirs, vec![codex.clone()]);
+        assert_eq!(load("codex_dirs =\n", Some(codex.clone())).codex_dirs, Vec::<PathBuf>::new(), "removed");
+        assert_eq!(
+            load("codex_dirs = ~/.codex, ~/codex-work\n", None).codex_dirs,
+            vec![codex.clone(), PathBuf::from("/home/u/codex-work")]
+        );
+        assert_eq!(
+            load("config_dirs = ~/.claude, ~/both\ncodex_dirs = ~/both, ~/.codex\n", None).codex_dirs,
+            vec![codex.clone()],
+            "listed as both: Claude"
+        );
+
+        // Saving unchanged settings leaves the default implicit.
+        let mut cfg = ConfigFile::parse("clock = auto\n");
+        let s = load("clock = auto\n", Some(codex.clone()));
+        s.apply_to(&mut cfg, &p);
+        assert_eq!(cfg.get("codex_dirs"), None);
+        // Removing it writes an empty list, so it stays removed.
+        let none = Settings { codex_dirs: Vec::new(), ..s.clone() };
+        none.apply_to(&mut cfg, &p);
+        assert_eq!(cfg.get("codex_dirs"), Some(""));
+        assert_eq!(load(&cfg.render(), Some(codex.clone())).codex_dirs, Vec::<PathBuf>::new());
+        // The window's save path: loaded with discovery, edited, saved.
+        let root = std::env::temp_dir().join(format!("cm-codex-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".codex")).unwrap();
+        std::fs::write(root.join(".codex/auth.json"), "{}").unwrap();
+        let rp = Paths::under(&root);
+        let save = |cfg: &mut ConfigFile, edit: &dyn Fn(&mut Settings)| {
+            let mut s = Settings::from_config(cfg, &rp, None);
+            s.discover_codex(cfg, &rp, None);
+            edit(&mut s);
+            s.apply_to(cfg, &rp);
+        };
+        let mut cfg = ConfigFile::default();
+        save(&mut cfg, &|s| s.codex_dirs.retain(|d| !d.ends_with(".codex")));
+        assert_eq!(cfg.get("codex_dirs"), Some(""), "removing the default sticks");
+        let mut cfg = ConfigFile::default();
+        save(&mut cfg, &|s| s.codex_dirs.push(PathBuf::from("/srv/codex")));
+        assert_eq!(cfg.get("codex_dirs"), Some("~/.codex, /srv/codex"), "adding one keeps the default");
+        let _ = std::fs::remove_dir_all(&root);
+        // Adding a second one lists both.
+        let mut cfg = ConfigFile::default();
+        let two = Settings { codex_dirs: vec![codex, PathBuf::from("/srv/codex")], ..s };
+        two.apply_to(&mut cfg, &p);
+        assert_eq!(cfg.get("codex_dirs"), Some("~/.codex, /srv/codex"));
     }
 
     // The Windows daemon read the token from $CLAUDE_CONFIG_DIR when set
@@ -1016,7 +1173,8 @@ mod tests {
         s.custom_colors.get_or_insert_default().set(ColorToken::Accent, 0x647d99);
         s.apply_to(&mut cfg, &paths());
         assert_eq!((cfg.get("theme"), cfg.get("color_accent")), (Some("custom"), Some("647d99")));
-        assert_eq!(cfg.get("color_bg"), Some("000000"), "all eleven are written");
+        assert_eq!(cfg.get("color_bg"), Some("000000"), "all twelve are written");
+        assert_eq!(cfg.get("color_fable"), Some("9775c7"));
         s.custom_colors.get_or_insert_default().set(ColorToken::Accent, ColorToken::Accent.default_rgb());
         s.apply_to(&mut cfg, &paths());
         assert_eq!(cfg.get("color_accent"), Some("d97757"), "a default stays, as Custom's own");
@@ -1028,6 +1186,18 @@ mod tests {
         for (i, t) in ColorToken::ALL.into_iter().enumerate() {
             assert_eq!(t.index(), i, "{t:?}");
         }
+        assert_eq!(ColorToken::TH, ColorToken::ALL[..11], "th is the first eleven");
+    }
+
+    #[test]
+    fn fable_colour_is_its_own_key() {
+        // A custom theme saved before color_fable starts it at the default.
+        let s = settings("theme = custom\ncolor_accent = 647d99\n");
+        assert_eq!(s.colors(DARK).get(ColorToken::Fable), ColorToken::Fable.default_rgb());
+        let s = settings("theme = custom\ncolor_fable = 112233\n");
+        let p = s.colors(DARK);
+        assert_eq!((p.get(ColorToken::Fable), p.to_hex().len()), (0x112233, 66), "th doesn't carry it");
+        assert_eq!(serde_json::to_string(&p.fable()).unwrap(), r#""112233""#);
     }
 
     #[test]
@@ -1169,6 +1339,20 @@ mod tests {
         s.pace_marker = true;
         s.apply_to(&mut cfg, &paths());
         assert_eq!(cfg.get("pace_marker"), Some("on"));
+    }
+
+    #[test]
+    fn menu_bar_usage() {
+        assert!(!settings("").menu_bar_usage, "off by default");
+        assert!(settings("menu_bar_usage = on\n").menu_bar_usage);
+
+        let mut cfg = ConfigFile::parse("");
+        let mut s = Settings::from_config(&cfg, &paths(), None);
+        s.apply_to(&mut cfg, &paths());
+        assert!(cfg.get("menu_bar_usage").is_none(), "the default stays out of the file");
+        s.menu_bar_usage = true;
+        s.apply_to(&mut cfg, &paths());
+        assert_eq!(cfg.get("menu_bar_usage"), Some("on"));
     }
 
     #[test]

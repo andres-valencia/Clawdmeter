@@ -104,9 +104,6 @@ pub struct StatusSnapshot {
     pub claude: Option<String>,
     /// Last successful device write.
     pub last_write_at: Option<i64>,
-    /// Alert chimes muted for this run (tray menu).
-    #[serde(alias = "beep_muted")]
-    pub chimes_muted: bool,
     /// Latest firmware release, when the daily check found one.
     pub latest_firmware: Option<String>,
     /// Firmware the device last reported (flash or `info`).
@@ -132,6 +129,27 @@ pub struct StatusSnapshot {
     /// Unix seconds the weekly window resets (`None`: unknown).
     #[serde(default)]
     pub week_resets_at: Option<i64>,
+    /// Fable's weekly % of its own limit, drawn inside the weekly meter
+    /// (`None`: unknown, no Fable limit, or a spend-capped account).
+    #[serde(default)]
+    pub fable_pct: Option<u32>,
+    /// A spend-capped account: `session_pct` is the spend % (it can pass
+    /// 100), and there is no session or weekly window to show.
+    #[serde(default)]
+    pub spend: bool,
+    /// Unix seconds the spend period resets (`None`: unknown).
+    #[serde(default)]
+    pub spend_resets_at: Option<i64>,
+    /// The shown account is a Codex account (a trial).
+    #[serde(default)]
+    pub codex: bool,
+    /// Its reset credits held, when known.
+    #[serde(default)]
+    pub resets_held: Option<u32>,
+    /// Unix seconds each held reset credit expires, soonest first (at most
+    /// `ResetCredits::MAX_EXPIRIES`); empty when unknown.
+    #[serde(default)]
+    pub resets_expiries: Vec<i64>,
 }
 
 impl StatusSnapshot {
@@ -146,6 +164,10 @@ impl StatusSnapshot {
         };
         let e = &s.engine;
         let reading = e.reading.as_ref();
+        // Credits that expired since the poll are gone (`ResetCredits::at`).
+        let resets = reading
+            .and_then(|r| r.resets.as_ref())
+            .map(|c| chrono::DateTime::from_timestamp(now, 0).map_or_else(|| c.clone(), |at| c.at(at)));
         StatusSnapshot {
             updated_at: now,
             link: link.into(),
@@ -175,7 +197,6 @@ impl StatusSnapshot {
             hooks: e.hooks,
             claude: s.claude.as_ref().map(|p| p.display().to_string()),
             last_write_at: s.last_write_at,
-            chimes_muted: false,
             latest_firmware: None,
             device_firmware: None,
             tray: format!("{:?}", tray_state(s, now)),
@@ -188,7 +209,32 @@ impl StatusSnapshot {
                 .and_then(|w| w.resets_at)
                 .map(|t| t.timestamp()),
             week_resets_at: reading.and_then(|r| r.week.as_ref()).and_then(|w| w.resets_at).map(|t| t.timestamp()),
+            fable_pct: reading.filter(|r| !r.is_spend_only()).and_then(|r| r.fable()).map(|w| w.pct),
+            spend: reading.is_some_and(|r| r.meter_kind() == clawdmeter_core::usage::MeterKind::Spend),
+            spend_resets_at: reading
+                .filter(|r| r.meter_kind() == clawdmeter_core::usage::MeterKind::Spend)
+                .and_then(|r| r.spend.as_ref())
+                .and_then(|sp| sp.resets_at)
+                .map(|t| t.timestamp()),
+            codex: reading.is_some_and(|r| r.provider == clawdmeter_core::usage::Provider::Codex),
+            resets_held: resets.as_ref().map(|c| c.held),
+            resets_expiries: resets.map(|c| c.expiries.iter().map(|t| t.timestamp()).collect()).unwrap_or_default(),
         }
+    }
+
+    /// The reset credits held, where every surface shows them (the device's
+    /// Resets card, the Overview, both trays): a weekly-only Codex plan
+    /// whose count is known. With a 5-hour window the week takes that place.
+    pub fn shown_resets(&self) -> Option<u32> {
+        self.resets_held.filter(|_| self.codex && self.no_session_limit)
+    }
+
+    /// Fable's % for the strip inside the Weekly bar, where the Overview and
+    /// the macOS tray panel draw it (as the device does): a Claude account's
+    /// weekly meter, never a Codex account's (Fable is Claude's) or a
+    /// spend-capped one's (no weekly bar).
+    pub fn shown_fable(&self) -> Option<u32> {
+        self.fable_pct.filter(|_| !self.codex && !self.spend)
     }
 
     /// Seconds since the numbers were read.
@@ -280,8 +326,6 @@ pub enum AppCommand {
     Reconnect,
     /// Forget the cached device address, then look again.
     Forget,
-    /// Mute / unmute the alert chimes for this run.
-    Mute(bool),
     /// Open the app window on a page (see [`crate::Page::parse`]).
     Open(String),
     /// Re-run the firmware update check now.
@@ -300,7 +344,6 @@ impl AppCommand {
             AppCommand::Refresh => "refresh".into(),
             AppCommand::Reconnect => "reconnect".into(),
             AppCommand::Forget => "forget".into(),
-            AppCommand::Mute(on) => format!("mute {}", if *on { "on" } else { "off" }),
             AppCommand::Open(w) => format!("open {w}"),
             AppCommand::CheckUpdate => "check-update".into(),
             AppCommand::SettingsChanged => "settings-changed".into(),
@@ -315,8 +358,6 @@ impl AppCommand {
             ("refresh", None) => AppCommand::Refresh,
             ("reconnect", None) => AppCommand::Reconnect,
             ("forget", None) => AppCommand::Forget,
-            ("mute", Some("on")) => AppCommand::Mute(true),
-            ("mute", Some("off")) => AppCommand::Mute(false),
             ("open", Some(w)) if crate::Page::parse(w).is_some() => AppCommand::Open(w.to_owned()),
             ("check-update", None) => AppCommand::CheckUpdate,
             ("settings-changed", None) => AppCommand::SettingsChanged,
@@ -483,6 +524,33 @@ mod tests {
     }
 
     #[test]
+    fn reset_credits_show_on_a_weekly_only_codex_plan_until_they_expire() {
+        use clawdmeter_core::usage::{Provider, ResetCredits, SessionLimit};
+        let day =
+            |d: u32| chrono::NaiveDate::from_ymd_opt(2026, 12, d).unwrap().and_hms_opt(12, 0, 0).unwrap().and_utc();
+        let mut s = status(connected(), true, None);
+        s.engine.reading = Some(UsageReading {
+            week: Some(Window { pct: 20, resets_at: None }),
+            session_limit: SessionLimit::Absent,
+            provider: Provider::Codex,
+            resets: Some(ResetCredits { held: 3, expiries: vec![day(1), day(5), day(12)] }),
+            ..Default::default()
+        });
+        let snap = StatusSnapshot::from_status(&s, day(1).timestamp() - 60);
+        assert_eq!((snap.shown_resets(), snap.resets_expiries.len()), (Some(3), 3));
+        // Kept past the soonest expiry (no poll since): that credit is gone.
+        let later = StatusSnapshot::from_status(&s, day(2).timestamp());
+        assert_eq!(
+            (later.shown_resets(), later.resets_expiries),
+            (Some(2), vec![day(5).timestamp(), day(12).timestamp()])
+        );
+        // Only a weekly-only Codex plan with a known count shows them.
+        assert_eq!(StatusSnapshot { no_session_limit: false, ..snap.clone() }.shown_resets(), None);
+        assert_eq!(StatusSnapshot { codex: false, ..snap.clone() }.shown_resets(), None);
+        assert_eq!(StatusSnapshot { resets_held: None, ..snap }.shown_resets(), None);
+    }
+
+    #[test]
     fn tray_state_priorities() {
         let now = 1_000;
         assert_eq!(tray_state(&status(connected(), true, Some(now - 10)), now), TrayState::Connected);
@@ -524,6 +592,32 @@ mod tests {
     }
 
     #[test]
+    fn fable_rides_with_the_week() {
+        let mut s = status(connected(), true, Some(990));
+        let r = s.engine.reading.as_mut().unwrap();
+        r.models = vec![
+            ("Opus".into(), Window { pct: 9, resets_at: None }),
+            ("FABLE".into(), Window { pct: 40, resets_at: None }),
+        ];
+        let snap = StatusSnapshot::from_status(&s, 1_000);
+        assert_eq!(snap.fable_pct, Some(40));
+        assert_eq!(snap.shown_fable(), Some(40), "drawn in the Weekly bar");
+        // Never on a Codex account's bar or a spend-capped one's, whatever
+        // the snapshot carries.
+        assert_eq!(StatusSnapshot { codex: true, ..snap.clone() }.shown_fable(), None);
+        assert_eq!(StatusSnapshot { spend: true, ..snap.clone() }.shown_fable(), None);
+        // A status file from before the field reads as unknown.
+        let mut old = serde_json::to_value(&snap).unwrap();
+        old.as_object_mut().unwrap().remove("fable_pct");
+        assert_eq!(serde_json::from_value::<StatusSnapshot>(old).unwrap().fable_pct, None);
+        // A spend-capped account has no weekly meter.
+        let r = s.engine.reading.as_mut().unwrap();
+        (r.session, r.week) = (None, None);
+        r.spend = Some(clawdmeter_core::usage::Spend { pct: 20, resets_at: None, period: None });
+        assert_eq!(StatusSnapshot::from_status(&s, 1_000).fable_pct, None);
+    }
+
+    #[test]
     fn no_session_limit_has_no_session_meter() {
         let mut s = status(connected(), true, Some(990));
         let r = s.engine.reading.as_mut().unwrap();
@@ -531,6 +625,7 @@ mod tests {
         let snap = StatusSnapshot::from_status(&s, 1_000);
         assert!(snap.no_session_limit);
         assert_eq!((snap.session_pct, snap.week_pct), (None, Some(12)));
+        assert_eq!(snap.fable_pct, None, "no Fable window: no overlay");
         // A snapshot from before the field: an ordinary account.
         let mut old = serde_json::to_value(&snap).unwrap();
         old.as_object_mut().unwrap().remove("no_session_limit");
@@ -543,7 +638,6 @@ mod tests {
         let paths = Paths::under(&dir);
         let cmds = [
             AppCommand::Refresh,
-            AppCommand::Mute(true),
             AppCommand::Open("hooks".into()),
             AppCommand::Forget,
             AppCommand::SettingsChanged,

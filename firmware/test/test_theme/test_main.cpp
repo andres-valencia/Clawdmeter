@@ -1,9 +1,12 @@
 // theme_clawd_art: Clawd's sprite follows TH_CLAWD by a palette swap, and
-// the default palette leaves the official art exactly as it is.
+// the default palette leaves the official art exactly as it is. The default
+// palette on a 1-bit panel (hal/mono_panel.h).
 //   pio test -d firmware -e native -f test_theme
 #include <unity.h>
 #include "theme_palette.h"
+#include "fable.h"
 #include "clawd_anim.h"
+#include "hal/mono_panel.h"
 #include <string.h>
 
 void setUp(void) {}
@@ -74,11 +77,49 @@ static void test_rgb565(void) {
     TEST_ASSERT_EQUAL_HEX16(0x10A2, theme_rgb565(0x141413));   // the face's eyes, as in the art
 }
 
+// `fc`: six hex digits, apart from `th`; the live value starts at the
+// Dark theme's violet and reports a change once.
+static void test_fable_colour(void) {
+    uint32_t v = 7;
+    TEST_ASSERT_FALSE(theme_parse_rgb("", &v));
+    TEST_ASSERT_FALSE(theme_parse_rgb("12345", &v));
+    TEST_ASSERT_FALSE(theme_parse_rgb("1234567", &v));
+    TEST_ASSERT_FALSE(theme_parse_rgb("12345g", &v));
+    TEST_ASSERT_FALSE(theme_parse_rgb(nullptr, &v));
+    TEST_ASSERT_EQUAL_HEX32(7, v);   // untouched
+    TEST_ASSERT_TRUE(theme_parse_rgb("BD93f9", &v));
+    TEST_ASSERT_EQUAL_HEX32(0xbd93f9, v);
+    TEST_ASSERT_EQUAL_HEX32(FABLE_COLOR_DEFAULT, theme_fable_hex());
+    TEST_ASSERT_FALSE(theme_fable_set(FABLE_COLOR_DEFAULT));
+    TEST_ASSERT_TRUE(theme_fable_set(0xbd93f9));
+    TEST_ASSERT_FALSE(theme_fable_set(0xbd93f9));
+    TEST_ASSERT_EQUAL_HEX32(0xbd93f9, theme_fable_hex());
+    theme_fable_set(FABLE_COLOR_DEFAULT);
+}
+
+// A mono_panel board keeps the default palette: backgrounds print as paper,
+// everything drawn on them as ink, and the mono pill's grey as ink too, but
+// closer to the threshold than any palette ink (theme_palette.h says why).
+static void test_mono_panel_prints_the_default_palette(void) {
+    const ThemeColor paper[] = { TH_BG, TH_PANEL, TH_BAR_BG };
+    const ThemeColor ink[] = { TH_TEXT, TH_DIM, TH_ACCENT, TH_GREEN, TH_AMBER, TH_RED };
+    for (ThemeColor c : paper)
+        TEST_ASSERT_FALSE(mono_ink565(theme_rgb565(THEME_DEFAULTS[c])));
+    const uint8_t pill = mono_luma565(theme_rgb565(THEME_MONO_PILL_HEX));
+    TEST_ASSERT_TRUE(pill >= MONO_INK_LUMA);
+    for (ThemeColor c : ink) {
+        TEST_ASSERT_TRUE(mono_ink565(theme_rgb565(THEME_DEFAULTS[c])));
+        TEST_ASSERT_TRUE(pill < mono_luma565(theme_rgb565(THEME_DEFAULTS[c])));
+    }
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_default_clawd_keeps_the_official_colours);
     RUN_TEST(test_sprites_follow_the_palette);
     RUN_TEST(test_new_clawd_recolours_only_his_body);
     RUN_TEST(test_rgb565);
+    RUN_TEST(test_mono_panel_prints_the_default_palette);
+    RUN_TEST(test_fable_colour);
     return UNITY_END();
 }

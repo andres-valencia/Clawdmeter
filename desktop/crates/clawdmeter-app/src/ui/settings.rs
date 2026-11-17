@@ -418,13 +418,20 @@ impl SettingsView {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Add Claude Code account folder".into()),
+            prompt: Some("Add Claude Code or Codex account folder".into()),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await {
                 let _ = this.update(cx, |v, cx| {
                     for p in paths {
-                        if !v.settings.config_dirs.contains(&p) {
+                        if v.settings.config_dirs.contains(&p) || v.settings.codex_dirs.contains(&p) {
+                            continue;
+                        }
+                        // A Codex home holds auth.json; anything else is a
+                        // Claude config dir.
+                        if clawdmeter_core::codex::is_codex_dir(&p) {
+                            v.save(|s, _| s.codex_dirs.push(p));
+                        } else {
                             v.save(|s, _| s.config_dirs.push(p));
                         }
                     }
@@ -738,7 +745,7 @@ impl SettingsView {
             .child(field(
                 t,
                 "Alert chime",
-                "Chimes when Claude needs you, on boards with a speaker. Mute from the tray until restart.",
+                "Chimes when Claude needs you, on boards with a speaker or buzzer.",
                 toggle(t, "alert-chime", alert, true, move |_, _, cx| {
                     let _ = me1.update(cx, |v, cx| {
                         v.save(|s, _| s.alert_chime = !alert);
@@ -749,8 +756,8 @@ impl SettingsView {
             .child(field(
                 t,
                 "Session reset chime",
-                "Chimes when your session usage resets (weekly usage, on accounts with no 5-hour limit), \
-                 on boards with a speaker.",
+                "Chimes when your session usage resets, on boards with a speaker or buzzer. \
+                 On accounts with no 5-hour limit, that's the weekly usage.",
                 toggle(t, "reset-chime", reset, true, move |_, _, cx| {
                     let _ = me2.update(cx, |v, cx| {
                         v.save(|s, _| s.reset_chime = !reset);
@@ -1444,6 +1451,11 @@ impl SettingsView {
                  to monitor. The device follows the account whose usage increased most recently (weekly usage, on \
                  accounts with no 5-hour limit).",
             ))
+            .child(caption(
+                t,
+                "Codex accounts are a trial. ~/.codex is found on its own; add other Codex folders (the ones with an \
+                 auth.json) the same way.",
+            ))
             .when_some(self.snap.as_ref(), |d, snap| {
                 d.child(caption(
                     t,
@@ -1457,9 +1469,13 @@ impl SettingsView {
             });
         let active = self.snap.as_ref().and_then(|s| s.account.clone());
         let errors: Vec<ipc::AccountError> = self.snap.as_ref().map(|s| s.errors.clone()).unwrap_or_default();
+        // The last Claude folder can't be removed; Codex folders always can.
         let only_one = self.settings.config_dirs.len() <= 1;
         let mut list = div().flex().flex_col().rounded(px(R_M)).border_1().border_color(t.line);
-        for (i, d) in self.settings.config_dirs.clone().into_iter().enumerate() {
+        let rows = self.settings.config_dirs.iter().map(|d| (d.clone(), false));
+        let rows: Vec<(PathBuf, bool)> =
+            rows.chain(self.settings.codex_dirs.iter().map(|d| (d.clone(), true))).collect();
+        for (i, (d, codex)) in rows.into_iter().enumerate() {
             let ds = d.display().to_string();
             let err = errors.iter().find(|e| e.dir == ds).cloned();
             let is_active = active.as_deref() == Some(ds.as_str());
@@ -1488,7 +1504,30 @@ impl SettingsView {
                             .flex_1()
                             .min_w_0()
                             .gap(px(2.))
-                            .child(div().font_family(FONT_MONO).text_size(px(13.)).child(tilde(&ds, &self.paths.home)))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(
+                                        div()
+                                            .font_family(FONT_MONO)
+                                            .text_size(px(13.))
+                                            .child(tilde(&ds, &self.paths.home)),
+                                    )
+                                    .when(codex, |r| {
+                                        r.child(
+                                            div()
+                                                .px(px(7.))
+                                                .rounded(px(R_S))
+                                                .border_1()
+                                                .border_color(t.line)
+                                                .text_size(px(11.5))
+                                                .text_color(t.mute)
+                                                .child("Codex"),
+                                        )
+                                    }),
+                            )
                             .when(!meta.is_empty(), |d| {
                                 d.child(div().text_size(px(12.5)).text_color(t.mute).child(meta))
                             }),
@@ -1499,11 +1538,14 @@ impl SettingsView {
                         SharedString::from(format!("rm-{i}")),
                         "Remove",
                         ButtonKind::Small,
-                        !only_one,
+                        codex || !only_one,
                         move |_, _, cx| {
                             let dir = dir.clone();
                             let _ = me.update(cx, |v, cx| {
-                                v.save(|s, _| s.config_dirs.retain(|x| *x != dir));
+                                v.save(|s, _| {
+                                    s.config_dirs.retain(|x| *x != dir);
+                                    s.codex_dirs.retain(|x| *x != dir);
+                                });
                                 cx.notify();
                             });
                         },
@@ -1853,6 +1895,23 @@ impl SettingsView {
                         });
                     }),
                 ))));
+        }
+
+        // Only macOS draws text beside a tray icon.
+        if cfg!(target_os = "macos") {
+            let me = cx.entity().downgrade();
+            let on = self.settings.menu_bar_usage;
+            pane = pane.child(field(
+                t,
+                "Show usage in the menu bar",
+                "Shows the higher of your session and weekly usage beside the Clawd icon.",
+                toggle(t, "menu-bar-usage", on, true, move |_, _, cx| {
+                    let _ = me.update(cx, |v, cx| {
+                        v.save(|s, _| s.menu_bar_usage = !on);
+                        cx.notify();
+                    });
+                }),
+            ));
         }
 
         let poll = if self.settings.poll_interval_explicit {
@@ -2208,6 +2267,7 @@ pub(crate) fn write_settings(
     let path = &paths.config_file;
     let mut cfg = ConfigFile::load(path)?;
     let mut s = Settings::from_config(&cfg, paths, None);
+    s.discover_codex(&cfg, paths, std::env::var("CODEX_HOME").ok().as_deref());
     change(&mut s, &mut cfg);
     s.apply_to(&mut cfg, paths);
     if let Some(dir) = path.parent() {
@@ -2266,12 +2326,24 @@ fn theme_board(t: &Theme, c: &Palette) -> gpui::Div {
                 .bg(col(ColorToken::Panel))
                 .child(div().w(px(18.)).h(px(4.)).rounded(px(1.)).bg(col(ColorToken::Dim)))
                 .child(
+                    // The weekly bar: the fill, and the Fable overlay over it.
                     div()
+                        .relative()
                         .w_full()
                         .h(px(5.))
                         .rounded(px(2.))
                         .bg(col(ColorToken::BarBg))
-                        .child(div().w(relative(0.6)).h_full().rounded(px(2.)).bg(col(ColorToken::Green))),
+                        .child(div().w(relative(0.6)).h_full().rounded(px(2.)).bg(col(ColorToken::Green)))
+                        .child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .w(relative(0.2))
+                                .h_full()
+                                .rounded_l(px(2.))
+                                .bg(col(ColorToken::Fable)),
+                        ),
                 ),
         )
 }

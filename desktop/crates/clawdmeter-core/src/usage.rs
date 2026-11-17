@@ -103,6 +103,86 @@ pub enum MeterKind {
     Spend,
 }
 
+/// Whose usage a reading is: the account is a Claude config dir or a Codex
+/// home ([`crate::codex`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Provider {
+    /// Claude Code.
+    #[default]
+    Claude,
+    /// OpenAI Codex (a trial).
+    Codex,
+}
+
+impl Provider {
+    /// Who runs the usage endpoint, for "Usage paused by … until …".
+    pub fn company(self) -> &'static str {
+        match self {
+            Provider::Claude => "Anthropic",
+            Provider::Codex => "OpenAI",
+        }
+    }
+}
+
+/// Codex's rate-limit reset credits: one-shot resets of the usage limit that
+/// OpenAI grants and that expire after a while.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ResetCredits {
+    /// Credits still held (the usage endpoint's `available_count`).
+    pub held: u32,
+    /// When each held credit expires, soonest first, those still ahead and
+    /// at most [`ResetCredits::MAX_EXPIRIES`]; empty when unknown.
+    pub expiries: Vec<DateTime<Utc>>,
+}
+
+impl ResetCredits {
+    /// The most expiries kept (and sent as `rx`).
+    pub const MAX_EXPIRIES: usize = 10;
+
+    /// When the soonest held credit expires, when known.
+    pub fn next_expiry(&self) -> Option<DateTime<Utc>> {
+        self.expiries.first().copied()
+    }
+
+    /// The credits still held at `now`: those whose expiry has passed are
+    /// gone, from the dates and the count. A reading stays shown while its
+    /// account is parked or offline, so an expiry can pass before the next
+    /// poll drops it; the device, the Overview and the tray all take this.
+    pub fn at(&self, now: DateTime<Utc>) -> ResetCredits {
+        let ahead: Vec<_> = self.expiries.iter().copied().filter(|t| *t > now).collect();
+        let gone = (self.expiries.len() - ahead.len()) as u32;
+        ResetCredits { held: self.held.saturating_sub(gone), expiries: ahead }
+    }
+}
+
+/// The model-scoped weekly limit drawn inside the weekly meter, matched by
+/// display name, ignoring case.
+pub const FABLE_MODEL: &str = "Fable";
+
+/// Fable's weekly limit as a share of the overall weekly limit, in percent
+/// (the owner's figure; the endpoint's `weekly_scoped_shares` says the same,
+/// `allowance_percent_of_weekly: 50`). The meters draw Fable's own % times
+/// this share: a used-up Fable limit fills half the weekly bar. The firmware
+/// has the same constant, `FABLE_WEEKLY_SHARE_PCT` in `firmware/src/fable.h`.
+pub const FABLE_WEEKLY_SHARE_PCT: u32 = 50;
+
+/// How close (hundredths of a point of the bar) the Fable overlay may come to
+/// the end of the weekly fill and still be drawn as reaching it. Fable usage
+/// is part of the weekly usage, but `wf` and `w` are rounded apart (week
+/// 31 %, Fable 61 %: 30.5 % of the bar), so a week spent only on Fable fills
+/// the whole fill rather than leaving a sliver of it. A fixed number of
+/// points, so it means the same on every bar width. The firmware has the
+/// same rule, `fable_reaches_fill` in `firmware/src/fable.h`.
+pub const FABLE_SNAP_HUNDREDTHS: u32 = 150;
+
+/// Whether the Fable overlay (Fable at `fable_pct` of its own limit) runs to
+/// the end of a weekly fill at `week_pct`: Fable's share of the bar is
+/// within [`FABLE_SNAP_HUNDREDTHS`] of it, or past it. Integer arithmetic,
+/// as on the device.
+pub fn fable_reaches_week(fable_pct: u32, week_pct: u32) -> bool {
+    fable_pct.min(100) * FABLE_WEEKLY_SHARE_PCT + FABLE_SNAP_HUNDREDTHS >= week_pct.min(100) * 100
+}
+
 /// Everything `/usage` told us for one account.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct UsageReading {
@@ -111,7 +191,9 @@ pub struct UsageReading {
     pub session: Option<Window>,
     /// `Current week (all models)`.
     pub week: Option<Window>,
-    /// `Current week (<model>)` lines, in order. Not sent to the device yet.
+    /// Model-scoped weekly windows (`Current week (<model>)` lines, the
+    /// endpoint's `weekly_scoped` limits), in order. Only Fable's is sent to
+    /// the device ([`UsageReading::fable`]).
     pub models: Vec<(String, Window)>,
     /// `Spend limit:` (spend-capped accounts, sent as the enterprise view).
     pub spend: Option<Spend>,
@@ -119,6 +201,10 @@ pub struct UsageReading {
     pub overage: bool,
     /// Whether the account has a 5-hour limit at all.
     pub session_limit: SessionLimit,
+    /// Whose usage this is.
+    pub provider: Provider,
+    /// Codex's reset credits, when the reading came with them.
+    pub resets: Option<ResetCredits>,
 }
 
 impl UsageReading {
@@ -132,6 +218,12 @@ impl UsageReading {
             (None, _) if self.no_session_limit() => self.week.as_ref().map_or(0, |w| w.pct),
             _ => 0,
         }
+    }
+
+    /// The Fable weekly window ([`FABLE_MODEL`]), when this reading has one.
+    /// `None` means unknown or no such limit, never 0 %.
+    pub fn fable(&self) -> Option<&Window> {
+        self.models.iter().find(|(m, _)| m.eq_ignore_ascii_case(FABLE_MODEL)).map(|(_, w)| w)
     }
 
     /// What [`UsageReading::session_pct`] measures.
@@ -268,17 +360,31 @@ impl UsageError {
         }
     }
 
+    /// [`UsageError::user_message`] for an account of `provider`.
+    pub fn user_message_for(&self, provider: Provider, retry_in: Option<i64>) -> String {
+        if provider == Provider::Claude {
+            return self.user_message(retry_in);
+        }
+        let again = again(retry_in);
+        match self {
+            UsageError::Timeout => format!("Codex's usage took too long to answer. {again}"),
+            UsageError::BadOutput(_) => format!("Couldn't read Codex's usage response. {again}"),
+            UsageError::NotLoggedIn(_) => "Sign in to Codex for this folder (codex login).".into(),
+            UsageError::NoUsageLines(_) => format!("Codex didn't report a usage limit for this account. {again}"),
+            UsageError::TokenExpired => "Codex's sign-in has expired. Running Codex renews it.".into(),
+            UsageError::TokenRejected => {
+                format!("OpenAI refused Codex's sign-in. Running Codex or codex login renews it. {again}")
+            }
+            UsageError::Offline(_) => format!("Couldn't reach OpenAI. {again}"),
+            e => e.user_message(retry_in),
+        }
+    }
+
     /// One or two short sentences for the app's UI; `Display` keeps the
     /// details for logs. `retry_in` is how long the account's backoff has
     /// left (s), when it is backing off.
     pub fn user_message(&self, retry_in: Option<i64>) -> String {
-        let again = match retry_in.filter(|s| *s > 0) {
-            Some(s) => {
-                let m = (s + 59) / 60;
-                format!("Trying again in about {m} minute{}.", if m == 1 { "" } else { "s" })
-            }
-            None => "Retrying.".to_owned(),
-        };
+        let again = again(retry_in);
         match self {
             UsageError::Spawn(_) => {
                 "Couldn't run Claude Code. Check its installation and the claude_path setting.".into()
@@ -300,11 +406,33 @@ impl UsageError {
     }
 }
 
+/// "Trying again in about N minutes." for a backoff with `retry_in` (s)
+/// left, else "Retrying.".
+fn again(retry_in: Option<i64>) -> String {
+    match retry_in.filter(|s| *s > 0) {
+        Some(s) => {
+            let m = (s + 59) / 60;
+            format!("Trying again in about {m} minute{}.", if m == 1 { "" } else { "s" })
+        }
+        None => "Retrying.".to_owned(),
+    }
+}
+
 /// "Usage paused by Anthropic until 14:05." for a block ending at `until`
 /// (unix seconds), shown at `utc_offset` (seconds east of UTC).
 pub fn paused_message(until: i64, utc_offset: i64) -> String {
+    paused_message_by(Provider::Claude, until, utc_offset)
+}
+
+/// [`paused_message`] naming the company whose endpoint paused the account.
+pub fn paused_message_by(provider: Provider, until: i64, utc_offset: i64) -> String {
+    format!("Usage paused by {} until {}.", provider.company(), paused_clock(until, utc_offset))
+}
+
+/// The local time a pause ends, `HH:MM` (the time in [`paused_message`]).
+pub fn paused_clock(until: i64, utc_offset: i64) -> String {
     let t = DateTime::<Utc>::from_timestamp(until + utc_offset, 0).unwrap_or_default();
-    format!("Usage paused by Anthropic until {}.", t.format("%H:%M"))
+    t.format("%H:%M").to_string()
 }
 
 fn snippet(s: &str) -> String {
@@ -935,7 +1063,8 @@ impl AccountState {
             // Once the pause has run out a probe answer ends it, so hours on
             // the probe don't lengthen the next one, unless the endpoint
             // missed again in this poll: misses in a row still climb.
-            Ok(r) if !polled.idle => {
+            Ok(mut r) if !polled.idle => {
+                crate::probe::carry_models(&mut r, self.last.as_ref(), now);
                 self.store(now, r);
                 if !self.backoff.active(now) && polled.idle_miss.is_none() {
                     self.backoff.on_success();
@@ -1042,6 +1171,35 @@ mod tests {
 
     fn at(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn reset_credits_past_their_expiry_are_gone() {
+        let c = ResetCredits {
+            held: 3,
+            expiries: vec![at("2026-11-30T19:56:00Z"), at("2026-12-01T12:00:00Z"), at("2026-12-12T12:00:00Z")],
+        };
+        assert_eq!(c.at(at("2026-11-16T17:00:00Z")), c, "all ahead");
+        let dec1 = c.at(at("2026-12-01T00:00:00Z"));
+        assert_eq!((dec1.held, dec1.expiries.len(), dec1.next_expiry()), (2, 2, Some(at("2026-12-01T12:00:00Z"))));
+        assert_eq!(c.at(at("2026-11-30T19:56:00Z")).held, 2, "gone at its expiry");
+        assert_eq!(c.at(at("2027-01-01T00:00:00Z")), ResetCredits { held: 0, expiries: vec![] });
+        // Undated credits (more held than dates known) stay counted.
+        let more = ResetCredits { held: 12, ..c.clone() };
+        assert_eq!(more.at(at("2026-12-01T00:00:00Z")).held, 11);
+        let undated = ResetCredits { held: 2, expiries: vec![] };
+        assert_eq!(undated.at(at("2027-01-01T00:00:00Z")), undated);
+    }
+
+    #[test]
+    fn fable_snaps_to_the_fill_within_a_point_and_a_half() {
+        // (week, Fable): Fable's half within 1.5 points of the week, or past it.
+        for (w, wf) in [(31, 61), (30, 60), (30, 58), (40, 78), (49, 96), (7, 12), (40, 77), (50, 250), (3, 50)] {
+            assert!(fable_reaches_week(wf, w), "{w}/{wf}");
+        }
+        for (w, wf) in [(40, 76), (40, 70), (60, 40), (100, 100)] {
+            assert!(!fable_reaches_week(wf, w), "{w}/{wf}");
+        }
     }
 
     #[cfg(unix)]

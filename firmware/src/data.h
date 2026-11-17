@@ -31,6 +31,8 @@ struct UsageData {
     int session_reset_mins;  // minutes until reset
     float weekly_pct;        // 7-day utilization (Pro/Max only; 0 for Enterprise)
     int weekly_reset_mins;   // minutes until weekly reset (Pro/Max only)
+    int16_t fable_pct;       // `wf` Fable's weekly % of its own limit (0-999); -1 = absent
+                             //   (unknown or no Fable limit): no overlay (fable.h)
     char status[16];         // "allowed", "limited", etc.
     bool chime;              // play the session-reset chime; false unless the app opts in
     bool beep;               // Claude needs attention: play the chime once for this packet
@@ -40,6 +42,14 @@ struct UsageData {
     bool weekly_only;        // true = no 5-hour limit (acct "week", verified Ultra):
                              //   session_pct / session_reset_mins carry the week,
                              //   copied from w / wr by payload_parse
+    bool codex;              // `pv` "codex": an OpenAI Codex account (a trial). The
+                             //   numbers are drawn on the Codex screen (white bars,
+                             //   "Codex" pill) and never reach Clawd's rate math
+    int16_t resets_held;     // `rc` Codex reset credits held (0-999); -1 = absent:
+                             //   no Resets card
+    int8_t  resets_expiry_n; // `rx` how many expiry dates came (0-10); -1 = absent
+    char    resets_expiry[10][8]; // `rx` each held credit's expiry, host-local
+                             //   ("Dec 1"), soonest first
     int time_pct;            // 0-100: fraction of billing period elapsed (Enterprise)
     int period_days;         // total billing period length in days (Enterprise)
     char reset_date[12];     // formatted reset date e.g. "Jul 1" (Enterprise)
@@ -71,6 +81,8 @@ struct UsageData {
     char     acct_label[ACCT_LABEL_LEN];   // `al` this account's name; "" = absent
     uint8_t  other_count;    // entries read from `o`
     AcctNumbers others[ACCT_OTHERS_MAX];   // `o` the other accounts' latest numbers
+    bool     has_fable_color;// `fc` present and well-formed
+    uint32_t fable_color;    // `fc` the Fable overlay's colour, 0xRRGGBB (fable.h)
     bool ok;                 // data parse succeeded
     bool valid;              // false until first successful parse
 };
