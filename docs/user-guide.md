@@ -279,7 +279,8 @@ in a file named `device-wifi` next to the app's config (the network name on
 the first line, the password on the second). The app then gives the device
 the network and each account's current access token. When the computer has
 been away for a minute, the device joins the WiFi and reads every account's
-usage itself, every 10 minutes, until the tokens expire: up to 8 hours after
+usage itself (the account on screen every 5 minutes, the others every 10)
+until the tokens expire: up to 8 hours after
 Claude Code last renewed them, about 4 on average. The meters stay live and
 the status line reads `WiFi 14:32`, the time of its last read; the account
 button works as usual. Once no token works it shows Offline as above. The

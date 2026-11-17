@@ -43,16 +43,17 @@ void cloud_sched_away(CloudSched* s) {
         if (s->a[i].has_token) s->a[i].due = true;
 }
 
-static bool is_due(const CloudSched* s, int i, uint32_t now_ms, long now) {
+static bool is_due(const CloudSched* s, int i, uint32_t now_ms, long now, bool shown) {
     const CloudAcct& a = s->a[i];
-    return cloud_sched_usable(s, i, now) && (a.due || reached(now_ms, a.next_ms));
+    if (!cloud_sched_usable(s, i, now)) return false;
+    return a.due || (reached(now_ms, a.next_ms) && (shown || reached(now_ms, a.slow_ms)));
 }
 
 int cloud_sched_next(const CloudSched* s, uint32_t now_ms, long now, int prefer) {
     if (s->called && !reached(now_ms, s->last_call_ms + CLOUD_GAP_MS)) return -1;
-    if (valid(prefer) && is_due(s, prefer, now_ms, now)) return prefer;
+    if (valid(prefer) && is_due(s, prefer, now_ms, now, true)) return prefer;
     for (int i = 0; i < CLOUD_ACCTS; i++)
-        if (is_due(s, i, now_ms, now)) return i;
+        if (is_due(s, i, now_ms, now, i == prefer)) return i;
     return -1;
 }
 
@@ -63,6 +64,7 @@ void cloud_sched_started(CloudSched* s, int idx, uint32_t now_ms) {
     s->a[idx].due = false;
     // Until the answer: not again for a poll interval.
     s->a[idx].next_ms = now_ms + CLOUD_POLL_MS;
+    s->a[idx].slow_ms = s->a[idx].next_ms;
 }
 
 void cloud_sched_result(CloudSched* s, int idx, CloudOutcome how, long retry_after_s, uint32_t now_ms) {
@@ -72,12 +74,14 @@ void cloud_sched_result(CloudSched* s, int idx, CloudOutcome how, long retry_aft
     switch (how) {
     case CLOUD_OK:
         a.fails = 0;
-        a.next_ms = now_ms + CLOUD_POLL_MS;
+        a.next_ms = now_ms + CLOUD_POLL_SHOWN_MS;
+        a.slow_ms = now_ms + CLOUD_POLL_MS;
         break;
     case CLOUD_THROTTLED: {
         const uint32_t wait = retry_after_s >= 0 ? (uint32_t)(retry_after_s > 86400 ? 86400 : retry_after_s) * 1000UL
                                                  : CLOUD_POLL_MS;
         a.next_ms = now_ms + wait;
+        a.slow_ms = a.next_ms;
         break;
     }
     case CLOUD_REFUSED:
@@ -89,6 +93,7 @@ void cloud_sched_result(CloudSched* s, int idx, CloudOutcome how, long retry_aft
         if (wait > CLOUD_RETRY_MAX_MS) wait = CLOUD_RETRY_MAX_MS;
         if (a.fails < 255) a.fails++;
         a.next_ms = now_ms + wait;
+        a.slow_ms = a.next_ms;
         break;
     }
     }

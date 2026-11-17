@@ -155,8 +155,16 @@ static void test_poll_order_gap_and_interval(void) {
     TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 15000, NOW, 1));
     cloud_sched_started(&s, 0, t + 15000);
     cloud_sched_result(&s, 0, CLOUD_OK, -1, t + 16000);
-    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 9 * MIN, NOW, 1));
-    TEST_ASSERT_EQUAL_INT(1, cloud_sched_next(&s, t + 2000 + 10 * MIN, NOW, 1));
+    // The one on screen every 5 minutes, the other every 10.
+    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 2000 + 5 * MIN - 1, NOW, 1));
+    TEST_ASSERT_EQUAL_INT(1, cloud_sched_next(&s, t + 2000 + 5 * MIN, NOW, 1));
+    // Neither on screen (another account is): 10 minutes for both.
+    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 2000 + 10 * MIN - 1, NOW, 5));
+    TEST_ASSERT_EQUAL_INT(1, cloud_sched_next(&s, t + 2000 + 10 * MIN, NOW, 5));
+    TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 16000 + 10 * MIN, NOW, 5));
+    // Switched to account 0 on the device: it is on screen now, so 5
+    // minutes after its last read is enough.
+    TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 16000 + 5 * MIN, NOW, 0));
     // Back from the computer and away again: everything due at once.
     cloud_sched_away(&s);
     TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 3 * MIN, NOW, 0));
@@ -170,6 +178,7 @@ static void test_throttled_refused_and_failed(void) {
     cloud_sched_started(&s, 0, t);
     cloud_sched_result(&s, 0, CLOUD_THROTTLED, 1353, t);          // exactly its retry-after
     TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 1352 * 1000UL, NOW, 0));
+    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 1352 * 1000UL, NOW, 5));   // not on screen either
     TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 1353 * 1000UL, NOW, 0));
     cloud_sched_started(&s, 0, t);
     cloud_sched_result(&s, 0, CLOUD_THROTTLED, -1, t);            // none given: a poll interval
@@ -206,8 +215,8 @@ static void test_millis_wrap(void) {
     TEST_ASSERT_TRUE(cloud_sched_want_wifi(&s, false, t - MIN, t, NOW, true));
     cloud_sched_started(&s, 0, t);
     cloud_sched_result(&s, 0, CLOUD_OK, -1, t);
-    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 9 * MIN, NOW, 0));
-    TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 10 * MIN, NOW, 0));
+    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 5 * MIN - 1, NOW, 0));
+    TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 5 * MIN, NOW, 0));
 }
 
 int main(void) {

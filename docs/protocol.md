@@ -91,8 +91,8 @@ When the BLE link has been down for a minute and a token is still usable, the
 device joins the network, sets its clock over NTP, and reads
 `GET https://api.anthropic.com/api/oauth/usage` itself for each account
 (the app's call: `Authorization: Bearer`, `anthropic-beta: oauth-2025-04-20`),
-at most every 10 minutes per account and 15 s apart, the account on screen
-first, a 429 waiting its `retry-after`. Its readings are drawn like the app's
+the account on screen at most every 5 minutes and the others every 10, 15 s
+apart, the account on screen first, a 429 waiting its `retry-after`. Its readings are drawn like the app's
 payloads (`firmware/src/cloud.cpp` builds them; only a fresh read of the account
 on screen is a real sample), and the status line reads `WiFi HH:MM`, the time of
 the last read. With no usable token left it shows the usual Offline view. When
