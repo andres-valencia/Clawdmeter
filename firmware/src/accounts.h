@@ -24,6 +24,7 @@ void accounts_ingest(const UsageData* d);
 
 int  accounts_count(void);                 // accounts the app has; < 2 = switching is off
 int  accounts_view(void);                  // the account chosen here; -1 = whichever the app shows
+int  accounts_app_idx(void);               // the account the last payload's numbers were (-1 = none)
 void accounts_set_view(int idx);           // restore the saved choice at boot (-1 = none)
 
 // Choose the next account with kept numbers, in index order, wrapping.

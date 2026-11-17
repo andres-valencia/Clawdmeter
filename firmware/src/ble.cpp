@@ -16,6 +16,7 @@
 #define RX_CHAR_UUID        "4c41555a-4465-7669-6365-000000000002"  // host writes here
 #define TX_CHAR_UUID        "4c41555a-4465-7669-6365-000000000003"  // device ack/nack notifies
 #define REQ_CHAR_UUID       "4c41555a-4465-7669-6365-000000000004"  // device-initiated refresh request
+#define AUTH_CHAR_UUID      "4c41555a-4465-7669-6365-000000000005"  // host writes tokens / WiFi (cloud.h)
 
 #define BLE_BUF_SIZE 512
 
@@ -80,7 +81,7 @@ static const uint8_t HID_REPORT_MAP[] = {
 // map). On the first boot with a new value the device sends Service Changed,
 // which NimBLE delivers to bonded hosts when they next connect, so they
 // rediscover instead of using a cached table.
-#define GATT_REVISION 3
+#define GATT_REVISION 4
 
 static NimBLEServer* server = nullptr;
 static NimBLEHIDDevice* hid_dev = nullptr;
@@ -89,6 +90,7 @@ static NimBLECharacteristic* input_consumer = nullptr;
 static NimBLECharacteristic* tx_char = nullptr;
 static NimBLECharacteristic* rx_char = nullptr;
 static NimBLECharacteristic* req_char = nullptr;
+static NimBLECharacteristic* auth_char = nullptr;
 
 static ble_state_t state = BLE_STATE_INIT;
 static bool need_advertise = false;
@@ -105,6 +107,10 @@ static volatile uint16_t param_fix_spent  = CONN_HANDLE_NONE;  // one per connec
 // (parse_buf), so a write never changes the text mid-parse.
 static char rx_buf[BLE_BUF_SIZE];
 static char parse_buf[BLE_BUF_SIZE];
+// AUTH writes (account tokens, the WiFi network: cloud.h), the same way.
+static char auth_buf[BLE_BUF_SIZE];
+static char auth_parse_buf[BLE_BUF_SIZE];
+static volatile bool auth_ready = false;
 static portMUX_TYPE rx_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool data_ready = false;
 static volatile bool has_received_data = false;
@@ -386,6 +392,34 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
     }
 };
 
+// AUTH: account tokens and the WiFi network for the device's own reads
+// (cloud.h). The same rules as RX: an encrypted link from the owner only.
+class AuthCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* chr, NimBLEConnInfo& info) override {
+        std::string id = info.getIdAddress().toString();
+        if (!info.isEncrypted()) {
+            Serial.println("BLE: dropping AUTH write from unencrypted link");
+            return;
+        }
+        // A fresh pairing: the first encrypted writer claims ownership, as on RX.
+        if (!owner_set && id != ZERO_ADDR) {
+            claim_owner(id);
+        }
+        if (!owner_set || strcmp(id.c_str(), owner_addr) != 0) {
+            Serial.printf("BLE: dropping AUTH write from non-owner %s\n", id.c_str());
+            return;
+        }
+        std::string val = chr->getValue();
+        size_t len = std::min(val.length(), (size_t)(BLE_BUF_SIZE - 1));
+        portENTER_CRITICAL(&rx_lock);
+        memcpy(auth_buf, val.c_str(), len);
+        auth_buf[len] = '\0';
+        auth_ready = true;
+        portEXIT_CRITICAL(&rx_lock);
+        chr->setValue((const uint8_t*)"", 0);   // don't keep a token readable in the attribute
+    }
+};
+
 // When the app enables notifications on the refresh char, ask for data
 // if we have none yet. Firing on subscribe (not on connect) ensures the
 // notification isn't dropped before the app's CCCD write completes.
@@ -495,6 +529,13 @@ void ble_init(void) {
     static RxCallbacks rxCb;
     rx_char->setCallbacks(&rxCb);
 
+    auth_char = svc->createCharacteristic(
+        AUTH_CHAR_UUID,
+        NIMBLE_PROPERTY::WRITE
+    );
+    static AuthCallbacks authCb;
+    auth_char->setCallbacks(&authCb);
+
     tx_char = svc->createCharacteristic(
         TX_CHAR_UUID,
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
@@ -602,6 +643,19 @@ void ble_disconnect_all(void) {
         handles[n++] = server->getPeerInfo(i).getConnHandle();
     }
     for (uint8_t i = 0; i < n; i++) server->disconnect(handles[i]);
+}
+
+bool ble_has_auth(void) {
+    return auth_ready;
+}
+
+const char* ble_get_auth(void) {
+    portENTER_CRITICAL(&rx_lock);
+    memcpy(auth_parse_buf, auth_buf, sizeof(auth_parse_buf));
+    memset(auth_buf, 0, sizeof(auth_buf));
+    auth_ready = false;
+    portEXIT_CRITICAL(&rx_lock);
+    return auth_parse_buf;
 }
 
 bool ble_has_data(void) {

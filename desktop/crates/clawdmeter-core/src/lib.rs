@@ -14,6 +14,8 @@
 //! * [`backoff`]: how long an account waits after a failed poll.
 //! * [`selector`]: which account to show.
 //! * [`payload`]: the JSON the firmware parses; [`buttons`]: what its buttons do.
+//! * [`device_auth`]: the tokens and WiFi network the device uses to read
+//!   usage on its own while the computer is away (this fork).
 //! * [`themes`]: the device's colour presets.
 //! * [`rate`]: the slow-clock mood.
 //! * [`engine`]: all of the above as one I/O-free state machine.
@@ -29,6 +31,7 @@ pub mod buttons;
 pub mod cadence;
 pub mod codex;
 pub mod config;
+pub mod device_auth;
 pub mod engine;
 pub mod events;
 pub mod launch;

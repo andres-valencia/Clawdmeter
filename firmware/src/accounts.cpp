@@ -66,6 +66,7 @@ void accounts_ingest(const UsageData* d) {
 
 int accounts_count(void) { return count; }
 int accounts_view(void) { return view; }
+int accounts_app_idx(void) { return app_idx; }
 void accounts_set_view(int idx) { view = idx < 0 ? -1 : idx; }
 
 int accounts_next(void) {

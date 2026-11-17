@@ -70,6 +70,11 @@ impl Paths {
         self.state_dir.join("usage-blocks.json")
     }
 
+    /// The device's WiFi network (`device_auth::Wifi`): SSID, then password.
+    pub fn device_wifi_file(&self) -> PathBuf {
+        self.state_dir.join("device-wifi")
+    }
+
     /// Downloaded firmware images.
     pub fn firmware_cache(&self) -> PathBuf {
         self.cache_dir.join("firmware")

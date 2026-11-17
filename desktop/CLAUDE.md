@@ -102,6 +102,9 @@ is faked behind `FlashHardware`.
   `%LOCALAPPDATA%\Clawdmeter\`): `config`, `events.log`, `attention`,
   `clear-<sid>`, `ble-address`, `daemon.log`, `usage-blocks.json`, app
   state and locks.
+- `<state>/device-wifi` (this fork): SSID and password, one per line;
+  with it the daemon sends each account's access token and the network on
+  AUTH (`device_auth.rs`, only what changed since the last connect).
 - Config keys: `config_dirs`, `codex_dirs` (Codex homes; absent = the
   discovered default, empty = none: `Settings::apply_codex_default`),
   `account_labels` (names for the accounts, in `config_dirs` order, sent as

@@ -15,8 +15,10 @@ use clawdmeter_ble::{
 use clawdmeter_core::attention::AttentionInbox;
 use clawdmeter_core::backoff;
 use clawdmeter_core::codex::{self, CodexCache};
+use clawdmeter_core::device_auth::{AccountToken, AuthSync, HostTime, Wifi};
 use clawdmeter_core::engine::PollPlan;
 use clawdmeter_core::events::EventTail;
+use clawdmeter_core::oauth;
 use clawdmeter_core::platform::AppearanceWatch;
 use clawdmeter_core::probe;
 use clawdmeter_core::usage;
@@ -30,6 +32,8 @@ const TICK: Duration = Duration::from_millis(500);
 const SETTINGS_EVERY: i64 = 5;
 /// Connection check interval (s).
 const LINK_CHECK_EVERY: i64 = 5;
+/// How often the device's tokens and WiFi network are checked for changes (s).
+const AUTH_CHECK_EVERY: i64 = 15;
 
 /// Requests from the UI.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,6 +217,10 @@ pub async fn run(paths: Paths, mut commands: mpsc::UnboundedReceiver<Command>, s
     let mut last_settings = unix_now();
     let mut last_link_check = unix_now();
     let mut last_write_at = None;
+    // The tokens and WiFi network the device already has (this fork's
+    // WiFi polling, `device_auth`); everything again on each connect.
+    let mut auth_sync = AuthSync::default();
+    let mut last_auth_check = 0;
     let mut ticker = tokio::time::interval(TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -375,6 +383,8 @@ pub async fn run(paths: Paths, mut commands: mpsc::UnboundedReceiver<Command>, s
                     reconnect.connected();
                     inbox.reset();
                     engine.on_connected();
+                    auth_sync.reset();
+                    last_auth_check = 0;
                 }
                 Ok(Err(e)) => {
                     link_state = match &e {
@@ -449,6 +459,45 @@ pub async fn run(paths: Paths, mut commands: mpsc::UnboundedReceiver<Command>, s
                             device_events = None;
                             link_state = LinkState::Searching;
                             reconnect.retry_in(now, 2);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- the device's own WiFi polling: tokens and network ----
+        if let Some(l) = link.as_ref().filter(|l| l.has_auth()) {
+            if now - last_auth_check >= AUTH_CHECK_EVERY {
+                last_auth_check = now;
+                // Opt-in: nothing goes to the device without a WiFi network.
+                if let Some(wifi) = Wifi::load(&paths.device_wifi_file()) {
+                    let s = engine.settings();
+                    let offset = clawdmeter_core::platform::utc_offset_secs();
+                    let hour_format =
+                        clawdmeter_core::payload::clock_fields(s.clock, chrono::Utc::now(), offset, host.prefers_12h)
+                            .map_or(24, |c| c.hour_format);
+                    let accounts: Vec<AccountToken> = s
+                        .config_dirs
+                        .iter()
+                        .enumerate()
+                        .take(usize::from(u8::MAX))
+                        .filter_map(|(i, d)| {
+                            let token = oauth::read_token(d, &paths.home, now)?;
+                            Some(AccountToken { idx: i as u8, label: s.account_label(i), token })
+                        })
+                        .collect();
+                    let count = s.config_dirs.len().min(usize::from(u8::MAX)) as u8;
+                    let host_time = HostTime { utc_offset_secs: offset, hour_format };
+                    for w in auth_sync.pending(Some(&wifi), &accounts, count, host_time, now, MAX_WRITE) {
+                        match l.write_auth(&w.bytes).await {
+                            Ok(()) => {
+                                log::info!("device: sent {}", w.what);
+                                auth_sync.mark_sent(&w);
+                            }
+                            Err(e) => {
+                                log::warn!("device: {} not sent: {e}", w.what);
+                                break;
+                            }
                         }
                     }
                 }

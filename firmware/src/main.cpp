@@ -23,6 +23,7 @@
 #include "perf.h"
 #include "pair_hold.h"
 #include "accounts.h"
+#include "cloud.h"
 
 #include "hal/board_caps.h"
 #include "hal/display_hal.h"
@@ -35,6 +36,7 @@
 #include "hal/board_info_hal.h"
 
 static UsageData usage = {};       // what the meters show
+static int8_t    cloud_ui_forced = -1;  // serial `cloud ui on|off|auto` (QA)
 static UsageData incoming = {};    // the last ok payload as the app sent it
 static uint32_t  view_told_ms = 0; // when the app was last told the account chosen here
 #define VIEW_RETELL_MS 5000        // repeat it this often while the app shows another
@@ -232,6 +234,15 @@ static void check_serial_cmd() {
             else if (strcmp(cmd_buf, "info") == 0)  send_info();
             else if (strcmp(cmd_buf, "perf") == 0)  perf_print();
             else if (strcmp(cmd_buf, "ble") == 0) ble_print_status();
+            else if (strcmp(cmd_buf, "cloud") == 0) cloud_print_status();
+            else if (strcmp(cmd_buf, "cloud poll") == 0) cloud_poll_now();
+            else if (strncmp(cmd_buf, "cloud ui ", 9) == 0) {
+                // QA: draw the "reading over WiFi" state without WiFi (the
+                // simulator has none): `cloud ui on|off|auto`.
+                const char* v = cmd_buf + 9;
+                cloud_ui_forced = strcmp(v, "on") == 0 ? 1 : strcmp(v, "off") == 0 ? 0 : -1;
+                Serial.printf("{\"cloud_ui\":%d}\n", cloud_ui_forced);
+            }
             else if (strcmp(cmd_buf, "disconnect") == 0) ble_disconnect_all();
             else if (strcmp(cmd_buf, "unpair") == 0) {
                 clear_pairing("serial");
@@ -341,6 +352,7 @@ void setup() {
     director_init();    // rooms + beats; boots on the meters (home)
     clawd_prefs_init();  // the saved device settings, before the app says otherwise
     accounts_set_view(account_view_load());   // the account last chosen with the button
+    cloud_init();        // the saved WiFi network and account tokens (cloud.h)
 
     Serial.printf("Dashboard ready (%s, %dx%d) %lu ms after boot, waiting for data on BLE...\n",
         board_caps().name, W, H, (unsigned long)millis());
@@ -491,6 +503,69 @@ static void button_run_release(ButtonSlot slot, ButtonRun* r) {
     *r = ButtonRun{};
 }
 
+// One payload to show: the app's, or one built from the device's own reads
+// (cloud.h). Both take the same path: the accounts, the signals, the meters.
+static void show_payload(UsageData parsed) {
+    // Several accounts: keep them all, and show the one chosen with
+    // the account button even while the app's numbers are another's
+    // (then from the kept numbers, as a replay). See accounts.h.
+    accounts_ingest(&parsed);
+    if (parsed.ok) incoming = parsed;
+    usage = parsed;
+    accounts_apply_view(&usage);
+    if (accounts_app_behind() && millis() - view_told_ms >= VIEW_RETELL_MS) {
+        view_told_ms = millis();
+        ble_send_view(accounts_view());
+    }
+    // Fast + slow clock bookkeeping: rate sample (replays skipped),
+    // hook activity lift, event dedupe. See signals.h.
+    const SignalsUpdate sig = signals_ingest(&usage);
+    const bool session_reset = sig.session_reset;
+    const int g_before = sig.group_before;
+    const int g_after  = sig.group_after;
+    shown_group = g_after;
+    if (sig.event_fired)
+        Serial.printf("[%lu] hook event '%c' (#%lu)\n", (unsigned long)millis(),
+                      sig.event ? sig.event : '?', (unsigned long)sig.event_seq);
+    // 5-hour session limit refilled → ding so the user knows they can
+    // use Claude again (no-op on boards without sound). Gated on the
+    // app's opt-in `c` (reset_chime); the `chime` serial cmd ignores it.
+    if (session_reset && usage.chime) {
+        Serial.println("session reset detected — chime");
+        sound_hal_chime();
+    }
+    // Claude Code hook fired on the host: the same ding. Not gated on
+    // `c`: the app only sets `b` when its alert chime is on.
+    if (usage.beep) {
+        Serial.println("attention — chime");
+        sound_hal_chime();
+    }
+    if (usage.pace_marker >= 0) pace_marker_set(usage.pace_marker != 0);
+    if (usage.btn_primary >= 0)   button_action_set(BTN_SLOT_PRIMARY, usage.btn_primary);
+    if (usage.btn_secondary >= 0) button_action_set(BTN_SLOT_SECONDARY, usage.btn_secondary);
+    if (usage.btn_pwr >= 0)       button_action_set(BTN_SLOT_PWR, usage.btn_pwr);
+    if (usage.has_theme) theme_set(usage.theme);
+    if (usage.has_fable_color) fable_color_set(usage.fable_color);
+    ui_update(&usage);
+    // A prompt (or you're back after a gap): you're at the computer,
+    // so a dimmed or dark panel wakes before Clawd notices you. A
+    // Stop or tool activity doesn't: Claude working alone isn't you.
+    if (sig.event_fired && (sig.event == 'p' || sig.event == 'b'))
+        idle_note_activity();
+    if (usage.liveliness > 0) liveliness_set(usage.liveliness);
+    if (usage.attn_anim_s >= 0) attn_anim_set(usage.attn_anim_s);
+    director_on_payload(&usage, &sig);
+    if (usage.alert_msg[0]) {
+        Serial.println("attention — mascot");
+        idle_note_activity();
+        director_alert(usage.alert_msg);
+    }
+    if (usage.alert_clear) director_alert_clear();
+    if (g_after != g_before)
+        Serial.printf("usage rate: group %d -> %d (s=%.2f%%)\n",
+            g_before, g_after, usage.session_pct);
+}
+
 void loop() {
     idle_tick();
     lv_timer_handler();
@@ -608,71 +683,29 @@ void loop() {
 
     check_serial_cmd();
 
+    if (ble_has_auth()) cloud_on_auth(ble_get_auth());
     if (ble_has_data()) {
         UsageData parsed = {};
         if (parse_json(ble_get_data(), &parsed)) {
-            // Several accounts: keep them all, and show the one chosen with
-            // the account button even while the app's numbers are another's
-            // (then from the kept numbers, as a replay). See accounts.h.
-            accounts_ingest(&parsed);
-            if (parsed.ok) incoming = parsed;
-            usage = parsed;
-            accounts_apply_view(&usage);
-            if (accounts_app_behind() && millis() - view_told_ms >= VIEW_RETELL_MS) {
-                view_told_ms = millis();
-                ble_send_view(accounts_view());
-            }
-            // Fast + slow clock bookkeeping: rate sample (replays skipped),
-            // hook activity lift, event dedupe. See signals.h.
-            const SignalsUpdate sig = signals_ingest(&usage);
-            const bool session_reset = sig.session_reset;
-            const int g_before = sig.group_before;
-            const int g_after  = sig.group_after;
-            shown_group = g_after;
-            if (sig.event_fired)
-                Serial.printf("[%lu] hook event '%c' (#%lu)\n", (unsigned long)millis(),
-                              sig.event ? sig.event : '?', (unsigned long)sig.event_seq);
-            // 5-hour session limit refilled → ding so the user knows they can
-            // use Claude again (no-op on boards without sound). Gated on the
-            // app's opt-in `c` (reset_chime); the `chime` serial cmd ignores it.
-            if (session_reset && usage.chime) {
-                Serial.println("session reset detected — chime");
-                sound_hal_chime();
-            }
-            // Claude Code hook fired on the host: the same ding. Not gated on
-            // `c`: the app only sets `b` when its alert chime is on.
-            if (usage.beep) {
-                Serial.println("attention — chime");
-                sound_hal_chime();
-            }
-            if (usage.pace_marker >= 0) pace_marker_set(usage.pace_marker != 0);
-            if (usage.btn_primary >= 0)   button_action_set(BTN_SLOT_PRIMARY, usage.btn_primary);
-            if (usage.btn_secondary >= 0) button_action_set(BTN_SLOT_SECONDARY, usage.btn_secondary);
-            if (usage.btn_pwr >= 0)       button_action_set(BTN_SLOT_PWR, usage.btn_pwr);
-            if (usage.has_theme) theme_set(usage.theme);
-            if (usage.has_fable_color) fable_color_set(usage.fable_color);
-            ui_update(&usage);
-            // A prompt (or you're back after a gap): you're at the computer,
-            // so a dimmed or dark panel wakes before Clawd notices you. A
-            // Stop or tool activity doesn't: Claude working alone isn't you.
-            if (sig.event_fired && (sig.event == 'p' || sig.event == 'b'))
-                idle_note_activity();
-            if (usage.liveliness > 0) liveliness_set(usage.liveliness);
-            if (usage.attn_anim_s >= 0) attn_anim_set(usage.attn_anim_s);
-            director_on_payload(&usage, &sig);
-            if (usage.alert_msg[0]) {
-                Serial.println("attention — mascot");
-                idle_note_activity();
-                director_alert(usage.alert_msg);
-            }
-            if (usage.alert_clear) director_alert_clear();
-            if (g_after != g_before)
-                Serial.printf("usage rate: group %d -> %d (s=%.2f%%)\n",
-                    g_before, g_after, usage.session_pct);
+            show_payload(parsed);
             ble_send_ack();
         } else {
             ble_send_nack();
         }
+    }
+
+    // The computer is away: the device reads usage itself over WiFi while a
+    // token it got from the app still works (cloud.h).
+    {
+        const int prefer = accounts_view() >= 0 ? accounts_view() : accounts_app_idx();
+        cloud_tick(ble_get_state() == BLE_STATE_CONNECTED, prefer);
+        UsageData own;
+        if (cloud_take_update(&own, prefer)) {
+            own.chime = incoming.chime;   // the app's reset-chime setting, as last sent
+            show_payload(own);
+        }
+        if (cloud_ui_forced >= 0) ui_set_cloud(cloud_ui_forced == 1, usage.clock_epoch);
+        else ui_set_cloud(cloud_live(), cloud_last_read_local());
     }
 
     // The mood group also moves without a payload: the 15-min window decays

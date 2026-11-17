@@ -20,6 +20,7 @@ The device advertises a custom GATT service next to the standard HID keyboard se
 | RX characteristic (write)      | `4c41555a-4465-7669-6365-000000000002` |
 | TX characteristic (notify)     | `4c41555a-4465-7669-6365-000000000003` |
 | REQ characteristic (notify)    | `4c41555a-4465-7669-6365-000000000004` |
+| AUTH characteristic (write)    | `4c41555a-4465-7669-6365-000000000005` (this fork) |
 | **HID service**                | `00001812-0000-1000-8000-00805f9b34fb` |
 
 The host writes one complete JSON object to RX per write. The app limits
@@ -66,3 +67,34 @@ A Codex account (a $100 Pro plan: weekly window only, reset credits):
 | `th` | Palette: 66 hex digits, eleven `rrggbb` colours run together in this order: background, cards, text, secondary text, accent, green, amber, red, bar track, Clawd, face eyes (`firmware/src/theme_palette.h`). The board repaints live and keeps it in NVS; a string of any other length or with a non-hex digit is ignored. The Clawd colour paints the screensaver face and the sprite: at draw time the official art's body orange and the shaded side of his body become that colour and the same shade of it, while his eyes, props and scenery keep their own colours (`theme_clawd_art`; the frames are never changed). The app sends a preset theme's palette (for the System theme, Dark or Light by the computer's appearance) or the user's own colours; the board doesn't know which. Boards with a 1-bit panel (`BoardCaps.mono_panel`, the e-paper board) ignore it and keep the default palette. Absent = keep the stored palette. Always eleven colours: older firmware drops any other length, so colours added later get keys of their own (`fc`). |
 | `fc` | The Fable overlay's colour (`wf`): six hex digits, `rrggbb`. Each app theme has its own: for the editor presets, the colour in the slot the scheme's published palette names purple (or mauve, violet), whatever it looks like (Catppuccin Mocha mauve `cba6f7`, Dracula `bd93f9`, Gruvbox `d3869b`, Monokai `ae81ff`, Nord nord15 `b48ead`, One Dark `c678dd`, Solarized violet `6c71c4`, Tokyo Night `9d7cd8`) and, since Anthropic's brand palette has no purple, a violet at the brand accents' saturation and lightness for Dark (`9775c7`) and a deeper one for Light (`644294`); Custom has its own (`color_fable`). Sent with `th` on every data payload but a Codex one (`pv`), and right away when it changes; the board repaints live and keeps it in NVS. Anything but six hex digits is ignored; absent = keep the stored colour, `9775c7` until one arrives. 1-bit panels ignore it. |
 | `ai`, `an`, `al`, `o` | Several accounts; sent only when `config_dirs` lists more than one. `ai` is the position in `config_dirs` of the account the numbers above belong to, `an` how many are configured, `al` that account's name (ASCII, at most 10 characters: its `account_labels` entry, else its folder name). `o` is an array with the other accounts' latest numbers, one object each: `i` and `l` (as `ai` and `al`) and `s`, `sr`, `w`, `wr`, `acct`, `tp`, `pd`, `rd` with the same meaning as the top-level keys. The device keeps every account's numbers (up to three besides the shown one), so a button set to switch account (`k1` by default) shows another one at once, also while the computer is away. Numbers taken from `o` are treated as a replay: they never reach the rate math or the reset detector. A real sample of another account than the last one starts the rate history over, like a change of `acct`. When a payload is too long for one write the app drops `o` entries, last first, after the alert message. |
+
+## AUTH: the device reading usage on its own (this fork)
+
+With a WiFi network set in the app (`<state>/device-wifi`: the SSID on the
+first line, the password on the second), the app writes one JSON object per
+write to AUTH, and only what changed since the last connect:
+
+```json
+{"wifi":{"s":"<ssid>","p":"<password>"}}
+{"i":0,"n":2,"l":"Trabajo","tk":"<access token>","x":1794342805,"tz":-18000,"tf":24}
+```
+
+`i` is the account's position in `config_dirs`, `n` how many accounts there
+are, `l` its label, `tk` its OAuth access token (never the refresh token: the
+computer stays the only one that renews them), `x` when that token expires
+(unix seconds, `0` unknown), `tz` the computer's UTC offset in seconds and `tf`
+its 12/24-hour clock. The firmware takes AUTH writes only over the owner's
+encrypted link, like RX, and keeps the network and each token in NVS until the
+token expires or the endpoint refuses it.
+
+When the BLE link has been down for a minute and a token is still usable, the
+device joins the network, sets its clock over NTP, and reads
+`GET https://api.anthropic.com/api/oauth/usage` itself for each account
+(the app's call: `Authorization: Bearer`, `anthropic-beta: oauth-2025-04-20`),
+at most every 10 minutes per account and 15 s apart, the account on screen
+first, a 429 waiting its `retry-after`. Its readings are drawn like the app's
+payloads (`firmware/src/cloud.cpp` builds them; only a fresh read of the account
+on screen is a real sample), and the status line reads `WiFi HH:MM`, the time of
+the last read. With no usable token left it shows the usual Offline view. When
+the app reconnects, WiFi goes off. Builds with `-DCLAWD_CLOUD_POLL` only
+(the AMOLED-2.16 here); elsewhere AUTH is ignored.

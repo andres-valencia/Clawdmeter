@@ -67,6 +67,10 @@ pub use clawdmeter_core::DEVICE_NAME;
 pub const SERVICE_UUID: Uuid = Uuid::from_u128(0x4c41555a_4465_7669_6365_000000000001);
 /// Host writes JSON here.
 pub const RX_UUID: Uuid = Uuid::from_u128(0x4c41555a_4465_7669_6365_000000000002);
+/// AUTH (write, this fork): account tokens and the WiFi network the device
+/// uses on its own (`clawdmeter_core::device_auth`). Absent on firmware
+/// without it.
+pub const AUTH_UUID: Uuid = Uuid::from_u128(0x4c41555a_4465_7669_6365_000000000005);
 /// Device ack/nack notifications (unused by the daemon).
 pub const TX_UUID: Uuid = Uuid::from_u128(0x4c41555a_4465_7669_6365_000000000003);
 /// Device-initiated refresh request (notify `0x01`).
@@ -424,6 +428,7 @@ pub fn device_event(uuid: Uuid, value: &[u8]) -> Option<DeviceEvent> {
 pub struct DeviceLink {
     peripheral: Peripheral,
     rx: Characteristic,
+    auth: Option<Characteristic>,
     key: String,
     name: Option<String>,
     health: WriteHealth,
@@ -529,6 +534,7 @@ impl DeviceLink {
             .find(|c| c.uuid == RX_UUID && c.service_uuid == SERVICE_UUID)
             .cloned()
             .ok_or(LinkError::MissingCharacteristic)?;
+        let auth = chars.iter().find(|c| c.uuid == AUTH_UUID && c.service_uuid == SERVICE_UUID).cloned();
         let (tx, events) = mpsc::unbounded_channel();
         let notifying: Vec<_> = chars
             .iter()
@@ -566,6 +572,7 @@ impl DeviceLink {
             name: cand.name,
             peripheral: p,
             rx,
+            auth,
             health: WriteHealth::default(),
             _forwarder: forwarder,
         };
@@ -587,6 +594,29 @@ impl DeviceLink {
         if self.health.is_zombie() {
             log::warn!("{ZOMBIE_WRITE_FAILURES} writes in a row failed on a live-looking link; dropping it");
         }
+        r
+    }
+
+    /// The firmware takes account tokens and the WiFi network (AUTH).
+    pub fn has_auth(&self) -> bool {
+        self.auth.is_some()
+    }
+
+    /// Write one AUTH message (at most [`MAX_WRITE`] bytes). Errors like
+    /// [`DeviceLink::write`]; [`LinkError::MissingCharacteristic`] on
+    /// firmware without AUTH.
+    pub async fn write_auth(&self, data: &[u8]) -> Result<(), LinkError> {
+        let auth = self.auth.as_ref().ok_or(LinkError::MissingCharacteristic)?;
+        let r = match tokio::time::timeout(
+            Duration::from_secs(10),
+            self.peripheral.write(auth, data, WriteType::WithResponse),
+        )
+        .await
+        {
+            Ok(r) => r.map_err(LinkError::Ble),
+            Err(_) => Err(LinkError::Timeout("write")),
+        };
+        self.health.record(r.is_ok());
         r
     }
 
@@ -892,11 +922,12 @@ mod tests {
         assert_eq!(RX_UUID.to_string(), "4c41555a-4465-7669-6365-000000000002");
         assert_eq!(TX_UUID.to_string(), "4c41555a-4465-7669-6365-000000000003");
         assert_eq!(REQ_UUID.to_string(), "4c41555a-4465-7669-6365-000000000004");
+        assert_eq!(AUTH_UUID.to_string(), "4c41555a-4465-7669-6365-000000000005");
         let src = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../firmware/src/ble.cpp"),
         );
         if let Ok(src) = src {
-            for u in [SERVICE_UUID, RX_UUID, TX_UUID, REQ_UUID] {
+            for u in [SERVICE_UUID, RX_UUID, TX_UUID, REQ_UUID, AUTH_UUID] {
                 assert!(src.contains(&u.to_string()), "{u} not in firmware/src/ble.cpp");
             }
             assert!(src.contains("BLE_BUF_SIZE 512"), "RX buffer size changed; revisit MAX_WRITE");

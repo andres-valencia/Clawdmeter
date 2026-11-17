@@ -18,6 +18,8 @@ pins and hardware gotchas, which loads when you work in that folder.
   SDL2 simulator (HAL against SDL2, Arduino shims in `shim/`, BLE playback
   from `firmware/sim/*.jsonl`).
 - **Data path** (`main.cpp`): BLE payload → `payload.cpp` (JSON → `UsageData`)
+  (and, while the computer is away, `cloud.cpp`'s own reads over WiFi:
+  `cloud_json.cpp` reads the endpoint, `cloud_sched.cpp` decides when)
   → `accounts.cpp` (several accounts: keeps each one's numbers and swaps in
   the one chosen with the primary button, as a replay)
   → `signals.cpp` (fast clock: activity, events, sessions; feeds

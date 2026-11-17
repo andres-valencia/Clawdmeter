@@ -17,7 +17,11 @@ void ui_set_pace_marker(bool on);
 void ui_apply_theme(void);          // repaint everything in the live palette (theme_palette.h)
 void ui_tick_anim(void);
 void ui_update_ble_status(ble_state_t state, const char* name, const char* mac);
-void ui_update_battery(int percent, bool charging, bool usb_power);  // percent < 0 = no battery
+void ui_update_battery(int percent, bool charging, bool usb_power);
+// The computer is away but the device reads usage itself over WiFi
+// (cloud.h): the meters stay live, and the status line names it with the
+// local time of the last read (`last_read_local`, wall-clock seconds).
+void ui_set_cloud(bool live, long last_read_local);  // percent < 0 = no battery
 
 // True while the meters show live numbers (connected, data fresh) rather than
 // the pairing hint or the stale-data idle view.

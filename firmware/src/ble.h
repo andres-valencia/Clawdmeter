@@ -17,6 +17,10 @@ void ble_clear_bonds(void);
 void ble_print_status(void);   // serial `ble`: state, bonds, owner, peers
 void ble_disconnect_all(void); // serial `disconnect`: drop every link
 bool ble_has_data(void);
+// An AUTH write (account token or WiFi network, cloud.h) is waiting.
+bool ble_has_auth(void);
+// It, copied for the caller (the shared buffer is wiped); valid until the next call.
+const char* ble_get_auth(void);
 // The latest payload, copied for the caller; valid until the next call.
 const char* ble_get_data(void);
 void ble_send_ack(void);

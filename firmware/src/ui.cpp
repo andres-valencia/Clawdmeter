@@ -132,6 +132,8 @@ static const uint32_t DATA_FRESH_MS = 90000;  // usage counts as "live" within t
 // ---- Shared ----
 static lv_image_dsc_t logo_dsc;
 static bool     s_ble_connected = false;   // cached BLE connection state
+static bool     s_cloud_live = false;      // the device reads usage itself over WiFi (cloud.h)
+static long     s_cloud_read = 0;          // local wall-clock seconds of its last read
 static uint32_t connected_at_ms = 0;       // when we last entered CONNECTED ("Connected" dwell)
 
 // Animation state
@@ -1126,7 +1128,8 @@ static void update_view_state(void) {
         // for a board with nothing to show. Boards without a
         // PWR button re-pair by a touch hold on the hint itself, so they
         // always show it; a cleared pairing brings it back (ui_set_pair_hint).
-        v = (data_received && have_last_data && board_caps().has_pwr_button) ? 1 : 0;
+        v = s_cloud_live && have_last_data ? 2
+          : (data_received && have_last_data && board_caps().has_pwr_button) ? 1 : 0;
     } else if (data_received && data_ok && (lv_tick_get() - last_data_ms) < DATA_FRESH_MS) {
         v = 2;  // live usage
     } else {
@@ -1183,6 +1186,41 @@ void ui_tick_anim(void) {
 
     // No host and the last numbers still up (update_view_state): "Offline",
     // then when they were last updated, back and forth.
+    // No host, but the device reads usage itself: "WiFi" and the time of its
+    // last read, in the accent colour, still.
+    if (!s_ble_connected && s_cloud_live) {
+        static long shown = -1;
+        if (status_offline) {
+            status_offline = false;
+            lv_obj_set_style_text_color(lbl_anim, theme_color(TH_ACCENT), 0);
+        }
+        if (s_cloud_read != shown) {
+            shown = s_cloud_read;
+            static char cbuf[32];
+            snprintf(cbuf, sizeof(cbuf), "%s WiFi", spinner_frames[1]);
+            if (s_cloud_read > 0) {
+                time_t t = (time_t)s_cloud_read;
+                struct tm tmv;
+                gmtime_r(&t, &tmv);
+                char when[12];
+                if (clock_fmt == 12) {
+                    int h12 = tmv.tm_hour % 12;
+                    if (h12 == 0) h12 = 12;
+                    snprintf(when, sizeof(when), "%d:%02d %s", h12, tmv.tm_min, tmv.tm_hour < 12 ? "AM" : "PM");
+                } else {
+                    snprintf(when, sizeof(when), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
+                }
+                char full[32];
+                snprintf(full, sizeof(full), "%s WiFi %s", spinner_frames[1], when);
+                if (layout_text_width(L.status_font, full) <= L.status_w) snprintf(cbuf, sizeof(cbuf), "%s", full);
+            }
+            lv_label_set_text(lbl_anim, cbuf);
+            still_shown = nullptr;
+            frozen_shown = nullptr;
+        }
+        return;
+    }
+
     const bool offline = !s_ble_connected && view_state == 1;
     if (offline != status_offline) {
         status_offline = offline;
@@ -1267,6 +1305,14 @@ void ui_tick_anim(void) {
 
 static void apply_battery_visibility(void) {
     if (battery_img) lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ui_set_cloud(bool live, long last_read_local) {
+    if (live == s_cloud_live && last_read_local == s_cloud_read) return;
+    s_cloud_live = live;
+    s_cloud_read = last_read_local;
+    update_view_state();
+    if (!live) anim_last_ms = 0;   // the usual line redraws on the next tick
 }
 
 void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) {

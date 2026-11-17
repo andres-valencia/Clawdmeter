@@ -121,6 +121,9 @@ The app writes one complete JSON object per write to RX
   (`accounts.cpp`); the primary button then switches the account shown
   instead of sending Space, and the device says `{"view":N}` on TX so the app
   keeps that account shown (`Engine::on_device_view`).
+- This fork's AUTH (`…-0005`, write): each account's access token and the
+  WiFi network (`device_auth.rs`, `cloud.cpp`), so the device reads the usage
+  endpoint itself while the computer is away. Protocol: `docs/protocol.md`.
 - Device → app: `0x01` on REQ (`…-0004`) when it has no data yet;
   `{"dismiss":true}` on TX (`…-0003`) when a tap or the 2-minute timeout ends
   an alert. The app clears its own alert and doesn't echo a clear back. Alerts
