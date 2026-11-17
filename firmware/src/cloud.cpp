@@ -22,6 +22,7 @@ void cloud_poll_now(void) {}
 #include <string.h>
 #include <esp_http_client.h>
 #include <esp_crt_bundle.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
@@ -337,7 +338,8 @@ void cloud_tick(bool ble_connected, int prefer) {
         WiFi.begin(ssid, password);
         wifi_state = WIFI_JOINING;
         wifi_since_ms = now_ms;
-        Serial.printf("cloud: joining %s\n", ssid);
+        Serial.printf("cloud: joining %s (internal heap free %u)\n", ssid,
+                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
         return;
     case WIFI_JOINING:
         if (WiFi.status() == WL_CONNECTED) {
@@ -464,7 +466,10 @@ void cloud_print_status(void) {
                       now && accts[i].has_reading ? now - accts[i].read_at : -1L, accts[i].last_status);
         first = false;
     }
-    Serial.println("]}}");
+    Serial.printf("],\"heap\":{\"internal_free\":%u,\"internal_largest\":%u,\"psram_free\":%u}}}\n",
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 }
 
 void cloud_poll_now(void) {
