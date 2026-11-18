@@ -12,14 +12,16 @@
 #define CLOUD_GRACE_MS       (60UL * 1000UL)         // BLE down this long before WiFi comes on
 #define CLOUD_POLL_SHOWN_MS  (5UL * 60UL * 1000UL)   // the account on screen, at most
 #define CLOUD_POLL_MS        (10UL * 60UL * 1000UL)  // every other account, at most
-#define CLOUD_GAP_MS         (15UL * 1000UL)         // between two calls
+#define CLOUD_GAP_MS         (15UL * 1000UL)         // between two calls...
+#define CLOUD_FIRST_GAP_MS   (1UL * 1000UL)          // ... or before an account's first read
 #define CLOUD_RETRY_MS       (2UL * 60UL * 1000UL)   // after a failed call; doubles
 #define CLOUD_RETRY_MAX_MS   (10UL * 60UL * 1000UL)
+#define CLOUD_FIRST_RETRY_MS (10UL * 1000UL)         // an account never read yet: its first 3 retries
 #define CLOUD_EXPIRY_SLACK_S 60                      // a token this close to expiry is spent
 
 enum CloudOutcome {
     CLOUD_OK,          // 200, read
-    CLOUD_THROTTLED,   // 429: wait its retry-after (else CLOUD_POLL_MS)
+    CLOUD_THROTTLED,   // 429: wait its retry-after, never less than CLOUD_POLL_MS
     CLOUD_REFUSED,     // 401 / 403: the token is dead
     CLOUD_FAILED,      // no network, timeout, 5xx, unreadable body
 };
@@ -31,6 +33,7 @@ struct CloudAcct {
     uint32_t next_ms;    // else not before this (on screen)...
     uint32_t slow_ms;    // ... nor before this while another account is
     uint8_t  fails;      // failed calls in a row
+    bool     read_once;  // a read has worked since boot (else CLOUD_FIRST_GAP_MS)
 };
 
 struct CloudSched {

@@ -49,11 +49,18 @@ static bool is_due(const CloudSched* s, int i, uint32_t now_ms, long now, bool s
     return a.due || (reached(now_ms, a.next_ms) && (shown || reached(now_ms, a.slow_ms)));
 }
 
+// The gap since the last call allows `i`: CLOUD_GAP_MS, or only
+// CLOUD_FIRST_GAP_MS before its first read (every account fast after boot).
+static bool gap_allows(const CloudSched* s, int i, uint32_t now_ms) {
+    if (!s->called) return true;
+    const uint32_t gap = s->a[i].read_once ? CLOUD_GAP_MS : CLOUD_FIRST_GAP_MS;
+    return reached(now_ms, s->last_call_ms + gap);
+}
+
 int cloud_sched_next(const CloudSched* s, uint32_t now_ms, long now, int prefer) {
-    if (s->called && !reached(now_ms, s->last_call_ms + CLOUD_GAP_MS)) return -1;
-    if (valid(prefer) && is_due(s, prefer, now_ms, now, true)) return prefer;
+    if (valid(prefer) && gap_allows(s, prefer, now_ms) && is_due(s, prefer, now_ms, now, true)) return prefer;
     for (int i = 0; i < CLOUD_ACCTS; i++)
-        if (is_due(s, i, now_ms, now, i == prefer)) return i;
+        if (gap_allows(s, i, now_ms) && is_due(s, i, now_ms, now, i == prefer)) return i;
     return -1;
 }
 
@@ -74,12 +81,17 @@ void cloud_sched_result(CloudSched* s, int idx, CloudOutcome how, long retry_aft
     switch (how) {
     case CLOUD_OK:
         a.fails = 0;
+        a.read_once = true;
         a.next_ms = now_ms + CLOUD_POLL_SHOWN_MS;
         a.slow_ms = now_ms + CLOUD_POLL_MS;
         break;
     case CLOUD_THROTTLED: {
-        const uint32_t wait = retry_after_s >= 0 ? (uint32_t)(retry_after_s > 86400 ? 86400 : retry_after_s) * 1000UL
-                                                 : CLOUD_POLL_MS;
+        // The endpoint can answer a 429 with a retry-after of 0, and calls
+        // during a block lengthen it: never less than a poll interval (the
+        // app's floor too).
+        uint32_t wait = retry_after_s >= 0 ? (uint32_t)(retry_after_s > 86400 ? 86400 : retry_after_s) * 1000UL
+                                           : CLOUD_POLL_MS;
+        if (wait < CLOUD_POLL_MS) wait = CLOUD_POLL_MS;
         a.next_ms = now_ms + wait;
         a.slow_ms = a.next_ms;
         break;
@@ -91,6 +103,9 @@ void cloud_sched_result(CloudSched* s, int idx, CloudOutcome how, long retry_aft
         uint32_t wait = CLOUD_RETRY_MS;
         for (int i = 0; i < a.fails && wait < CLOUD_RETRY_MAX_MS; i++) wait *= 2;
         if (wait > CLOUD_RETRY_MAX_MS) wait = CLOUD_RETRY_MAX_MS;
+        // Not read since boot (a call that timed out while the app was
+        // reconnecting, say): the account button needs it, so try again soon.
+        if (!a.read_once && a.fails < 3) wait = CLOUD_FIRST_RETRY_MS;
         if (a.fails < 255) a.fails++;
         a.next_ms = now_ms + wait;
         a.slow_ms = a.next_ms;

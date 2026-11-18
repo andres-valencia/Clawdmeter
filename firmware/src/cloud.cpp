@@ -36,8 +36,9 @@ void cloud_poll_now(void) {}
 #define OAUTH_BETA      "oauth-2025-04-20"
 #define TOKEN_MAX       400            // bigger than any access token seen (108)
 #define BODY_MAX        8192
-#define WIFI_JOIN_MS    (30UL * 1000UL)
-#define WIFI_RETRY_MS   (60UL * 1000UL)
+#define WIFI_JOIN_MS    (20UL * 1000UL)
+#define WIFI_RETRY_MS   (20UL * 1000UL)
+#define CLOCK_WAIT_MS   (30UL * 1000UL)   // WiFi up this long without the time: start over
 #define READ_FRESH_S    (25L * 60L)    // a read older than this isn't live
 #define REPLAY_MS       (60UL * 1000UL)
 #define NVS_NS          "cloud"
@@ -67,8 +68,10 @@ static bool      away = false;        // the computer has been away the grace pe
 enum WifiState { WIFI_IDLE, WIFI_JOINING, WIFI_UP };
 static WifiState wifi_state = WIFI_IDLE;
 static uint32_t  wifi_since_ms = 0;
+static uint32_t  up_since_ms = 0;
+static uint32_t  wifi_begin_ms = 0;   // the last WiFi.begin
+static int       wifi_rejoins = 0;    // quick retries in this join
 static uint32_t  wifi_retry_ms = 0;
-static bool      ntp_started = false;
 
 static bool      update_ready = false;
 static int       fresh_idx = -1;
@@ -298,6 +301,7 @@ static void handle_result(const Res& r, uint32_t now_ms) {
     } else if (r.status == 401 || r.status == 403) {
         how = CLOUD_REFUSED;
     }
+    if (r.status == 429) Serial.printf("cloud: account %d retry-after %ld s\n", r.idx, r.retry_after);
     Serial.printf("cloud: account %d read -> HTTP %d (%s)\n", r.idx, r.status,
                   how == CLOUD_OK ? "ok" : how == CLOUD_THROTTLED ? "paused" : how == CLOUD_REFUSED ? "refused" : "failed");
     cloud_sched_result(&sched, r.idx, how, r.retry_after, now_ms);
@@ -340,23 +344,42 @@ void cloud_tick(bool ble_connected, int prefer) {
     switch (wifi_state) {
     case WIFI_IDLE:
         if ((int32_t)(now_ms - wifi_retry_ms) < 0) return;
-        WiFi.mode(WIFI_STA);
+        if (!WiFi.mode(WIFI_STA)) {
+            Serial.printf("cloud: WiFi didn't start (internal heap free %u); retrying in %lu s\n",
+                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                          WIFI_RETRY_MS / 1000UL);
+            WiFi.mode(WIFI_OFF);
+            wifi_retry_ms = now_ms + WIFI_RETRY_MS;
+            return;
+        }
         WiFi.begin(ssid, password);
         wifi_state = WIFI_JOINING;
         wifi_since_ms = now_ms;
+        wifi_begin_ms = now_ms;
+        wifi_rejoins = 0;
         Serial.printf("cloud: joining %s (internal heap free %u)\n", ssid,
                       (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
         return;
     case WIFI_JOINING:
         if (WiFi.status() == WL_CONNECTED) {
             wifi_state = WIFI_UP;
+            up_since_ms = now_ms;
             Serial.printf("cloud: WiFi up (%s)\n", WiFi.localIP().toString().c_str());
-            if (!ntp_started) {
-                configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
-                ntp_started = true;
-            }
+            // Every join restarts the time sync: a first try that failed
+            // (no DNS yet, say) would otherwise back off for a long while.
+            configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
+        } else if (WiFi.status() == WL_CONNECT_FAILED && now_ms - wifi_since_ms < WIFI_JOIN_MS &&
+                   now_ms - wifi_begin_ms >= 1000UL && wifi_rejoins < 3) {
+            // The join failed outright (about 1 boot in 8 on the 2.16, right
+            // after power-up): ask again now rather than wait out the timeout.
+            wifi_rejoins++;
+            wifi_begin_ms = now_ms;
+            Serial.printf("cloud: WiFi join failed; trying again (%d)\n", wifi_rejoins);
+            WiFi.disconnect(false, false);
+            WiFi.begin(ssid, password);
         } else if (now_ms - wifi_since_ms >= WIFI_JOIN_MS) {
-            Serial.println("cloud: WiFi join timed out");
+            Serial.printf("cloud: WiFi join timed out (status %d); retrying in %lu s\n", (int)WiFi.status(),
+                          WIFI_RETRY_MS / 1000UL);
             wifi_off();
             wifi_retry_ms = now_ms + WIFI_RETRY_MS;
         }
@@ -366,6 +389,13 @@ void cloud_tick(bool ble_connected, int prefer) {
             Serial.println("cloud: WiFi lost");
             wifi_off();
             wifi_retry_ms = now_ms + WIFI_RETRY_MS;
+            return;
+        }
+        // No time from NTP: reads need it (TLS, the countdowns). Start over.
+        if (!now && !in_flight && now_ms - up_since_ms >= CLOCK_WAIT_MS) {
+            Serial.println("cloud: no time from NTP after 30 s on WiFi; starting over");
+            wifi_off();
+            wifi_retry_ms = now_ms + 2000UL;
             return;
         }
         break;

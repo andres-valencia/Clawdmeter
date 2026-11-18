@@ -149,25 +149,32 @@ static void test_poll_order_gap_and_interval(void) {
     uint32_t t = 5000;
     TEST_ASSERT_EQUAL_INT(1, cloud_sched_next(&s, t, NOW, 1));     // the one on screen first
     cloud_sched_started(&s, 1, t);
-    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 1000, NOW, 1));   // in flight / gap
-    cloud_sched_result(&s, 1, CLOUD_OK, -1, t + 2000);
-    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 10000, NOW, 1));  // the gap between calls
-    TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 15000, NOW, 1));
-    cloud_sched_started(&s, 0, t + 15000);
-    cloud_sched_result(&s, 0, CLOUD_OK, -1, t + 16000);
+    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 500, NOW, 1));    // in flight / gap
+    cloud_sched_result(&s, 1, CLOUD_OK, -1, t + 800);
+    // An account never read yet goes right after (1 s), so the account
+    // button has every account within seconds of a boot.
+    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 999, NOW, 1));
+    TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 1000, NOW, 1));
+    cloud_sched_started(&s, 0, t + 1000);
+    cloud_sched_result(&s, 0, CLOUD_OK, -1, t + 1500);
     // The one on screen every 5 minutes, the other every 10.
-    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 2000 + 5 * MIN - 1, NOW, 1));
-    TEST_ASSERT_EQUAL_INT(1, cloud_sched_next(&s, t + 2000 + 5 * MIN, NOW, 1));
+    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 800 + 5 * MIN - 1, NOW, 1));
+    TEST_ASSERT_EQUAL_INT(1, cloud_sched_next(&s, t + 800 + 5 * MIN, NOW, 1));
     // Neither on screen (another account is): 10 minutes for both.
-    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 2000 + 10 * MIN - 1, NOW, 5));
-    TEST_ASSERT_EQUAL_INT(1, cloud_sched_next(&s, t + 2000 + 10 * MIN, NOW, 5));
-    TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 16000 + 10 * MIN, NOW, 5));
+    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 800 + 10 * MIN - 1, NOW, 5));
+    TEST_ASSERT_EQUAL_INT(1, cloud_sched_next(&s, t + 800 + 10 * MIN, NOW, 5));
+    TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 1500 + 10 * MIN, NOW, 5));
     // Switched to account 0 on the device: it is on screen now, so 5
     // minutes after its last read is enough.
-    TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 16000 + 5 * MIN, NOW, 0));
-    // Back from the computer and away again: everything due at once.
+    TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 1500 + 5 * MIN, NOW, 0));
+    // Back from the computer and away again: everything due at once, and
+    // with both read before, 15 s between the calls.
     cloud_sched_away(&s);
     TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 3 * MIN, NOW, 0));
+    cloud_sched_started(&s, 0, t + 3 * MIN);
+    cloud_sched_result(&s, 0, CLOUD_OK, -1, t + 3 * MIN + 500);
+    TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 3 * MIN + 15000 - 1, NOW, 1));
+    TEST_ASSERT_EQUAL_INT(1, cloud_sched_next(&s, t + 3 * MIN + 15000, NOW, 1));
 }
 
 static void test_throttled_refused_and_failed(void) {
@@ -184,8 +191,23 @@ static void test_throttled_refused_and_failed(void) {
     cloud_sched_result(&s, 0, CLOUD_THROTTLED, -1, t);            // none given: a poll interval
     TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 9 * MIN, NOW, 0));
     TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 10 * MIN, NOW, 0));
-    // Failures back off 2, 4, 8, then 10 minutes; a good read resets it.
-    const uint32_t waits[] = { 2 * MIN, 4 * MIN, 8 * MIN, 10 * MIN, 10 * MIN };
+    // A retry-after of 0 (seen on the device) or a few seconds: still 10 min.
+    for (long ra : {0L, 5L, 120L}) {
+        cloud_sched_started(&s, 0, t);
+        cloud_sched_result(&s, 0, CLOUD_THROTTLED, ra, t);
+        TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 10 * MIN - 1, NOW, 0));
+        TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 10 * MIN, NOW, 0));
+    }
+    // Never read yet: the first three failures retry in 10 s.
+    for (int i = 0; i < 3; i++) {
+        cloud_sched_started(&s, 0, t);
+        cloud_sched_result(&s, 0, CLOUD_FAILED, -1, t);
+        TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + 9999, NOW, 0));
+        TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 10000, NOW, 0));
+    }
+    // Then (and for an account read before) they back off 16 min capped at
+    // 10; a good read resets the count.
+    const uint32_t waits[] = { 10 * MIN, 10 * MIN };
     for (uint32_t w : waits) {
         cloud_sched_started(&s, 0, t);
         cloud_sched_result(&s, 0, CLOUD_FAILED, -1, t);
@@ -194,9 +216,14 @@ static void test_throttled_refused_and_failed(void) {
     }
     cloud_sched_started(&s, 0, t);
     cloud_sched_result(&s, 0, CLOUD_OK, -1, t);
-    cloud_sched_started(&s, 0, t);
-    cloud_sched_result(&s, 0, CLOUD_FAILED, -1, t);
-    TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + 2 * MIN, NOW, 0));
+    // Read once: 2, 4, 8, then 10 minutes.
+    const uint32_t read_waits[] = { 2 * MIN, 4 * MIN, 8 * MIN, 10 * MIN };
+    for (uint32_t w : read_waits) {
+        cloud_sched_started(&s, 0, t);
+        cloud_sched_result(&s, 0, CLOUD_FAILED, -1, t);
+        TEST_ASSERT_EQUAL_INT(-1, cloud_sched_next(&s, t + w - 1, NOW, 0));
+        TEST_ASSERT_EQUAL_INT(0, cloud_sched_next(&s, t + w, NOW, 0));
+    }
     // Refused: the token is gone; nothing more to call.
     cloud_sched_started(&s, 0, t);
     cloud_sched_result(&s, 0, CLOUD_REFUSED, -1, t);
