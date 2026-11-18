@@ -294,7 +294,7 @@ device read right away, even with the app connected.
 | --- | --- |
 | BOOT | By default, switch the account shown when several are configured; with one account, hold to send Space to the focused window, for Claude Code voice input. GPIO 0 on S3; GPIO 9 on C6. |
 | Secondary, where fitted | By default, send Shift+Tab to the focused window. S3 2.16: GPIO 18; C6 2.16: GPIO 10; LCD-1.54: GPIO 5. |
-| PWR, where software-controlled | Short press: by default, brightness. Hold about 3 seconds and release: clear pairing. |
+| PWR, where software-controlled | Short press: by default, brightness (on boards with an AXP2101 PMU, about half a second after the press). Two presses within half a second: power off, keeping the pairing, tokens and settings; PWR turns it back on (this fork). Hold about 3 seconds and release: clear pairing. |
 
 Each button can do something else. **Controls** on the app's Device page
 shows your board's buttons as keys, in the order they sit on it and under

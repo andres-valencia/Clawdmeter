@@ -24,6 +24,7 @@
 #include "pair_hold.h"
 #include "accounts.h"
 #include "cloud.h"
+#include "pwr_taps.h"
 
 #include "hal/board_caps.h"
 #include "hal/display_hal.h"
@@ -150,6 +151,17 @@ static bool switch_account(void) {
     ble_send_view(idx);
     Serial.printf("[%lu] account button: showing account %d\n", (unsigned long)millis(), idx);
     return true;
+}
+
+// PWR double press (this fork): say so on the status line, give the panel
+// a moment to show it, and cut the power. Pairing, tokens and settings live
+// in NVS and are kept; the PWR button turns the board back on.
+static void power_off(void) {
+    Serial.println("PWR double press: powering off");
+    ui_set_alert_text("Apagando\xE2\x80\xA6");
+    lv_refr_now(NULL);
+    delay(800);
+    power_hal_shutdown();
 }
 
 // Forget every bonded host and advertise again, so another computer (or
@@ -640,8 +652,19 @@ void loop() {
             }
         }
 
-        if (power_hal_pwr_pressed()) {
-            if (!idle_consume_wake_press()) {
+        // A PWR press. Where the PMU can power the board off (this fork),
+        // a second press within PWR_DOUBLE_MS does that, so a single press
+        // waits out the window before its usual action (pwr_taps.h).
+        {
+            static PwrTaps pwr_taps = {};
+            PwrTap tap = PWR_TAP_NONE;
+            if (power_hal_pwr_pressed() && !idle_consume_wake_press()) {
+                tap = power_hal_can_shutdown() ? pwr_taps_press(&pwr_taps, millis()) : PWR_TAP_SINGLE;
+            }
+            if (tap == PWR_TAP_NONE) tap = pwr_taps_tick(&pwr_taps, millis());
+            if (tap == PWR_TAP_DOUBLE) {
+                power_off();
+            } else if (tap == PWR_TAP_SINGLE) {
                 // Counts as you being here. On a touchless board whose only
                 // button this is, it dismisses an active alert first; else it
                 // runs its action, once (the press registers on release).

@@ -13,6 +13,7 @@
 #define PWR_POLL_MS      50
 
 static XPowersPMU pmu;
+static bool       pmu_ok = false;
 
 static int      cached_pct        = -1;
 static bool     cached_charging   = false;
@@ -30,6 +31,7 @@ void power_hal_init(void) {
         return;
     }
     Serial.println("AXP2101 init OK");
+    pmu_ok = true;
 
     pmu.enableBattDetection();
     pmu.enableBattVoltageMeasure();
@@ -96,4 +98,15 @@ bool power_hal_pwr_long_pressed(void) {
 bool power_hal_pwr_released(void) {
     if (pwr_released_flag) { pwr_released_flag = false; return true; }
     return false;
+}
+
+// Software power off (this fork): the PWR double press. The PWR button
+// turns the board back on, like after its 8 s press-off.
+bool power_hal_can_shutdown(void) { return pmu_ok; }
+
+void power_hal_shutdown(void) {
+    if (!pmu_ok) return;
+    Serial.println("power: off");
+    Serial.flush();
+    pmu.shutdown();
 }
