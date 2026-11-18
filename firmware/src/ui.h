@@ -21,7 +21,11 @@ void ui_update_battery(int percent, bool charging, bool usb_power);
 // The computer is away but the device reads usage itself over WiFi
 // (cloud.h): the meters stay live, and the status line names it with the
 // local time of the last read (`last_read_local`, wall-clock seconds).
-void ui_set_cloud(bool live, long last_read_local);  // percent < 0 = no battery
+void ui_set_cloud(bool live, long last_read_local);
+// A paired computer is expected back, or the device can read usage itself
+// (a usable token): with nothing to show yet and no host, the meters wait,
+// dimmed, under "Waiting", instead of the pairing hint.
+void ui_set_host_expected(bool expected);  // percent < 0 = no battery
 
 // True while the meters show live numbers (connected, data fresh) rather than
 // the pairing hint or the stale-data idle view.

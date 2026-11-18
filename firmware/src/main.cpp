@@ -729,6 +729,13 @@ void loop() {
         }
         if (cloud_ui_forced >= 0) ui_set_cloud(cloud_ui_forced == 1, usage.clock_epoch);
         else ui_set_cloud(cloud_live(), cloud_last_read_local());
+        // Paired, with a token the device can read with: wait for the data
+        // rather than ask to pair (ui_set_host_expected).
+        static uint32_t last_expect_ms = 0;
+        if (millis() - last_expect_ms >= 1000) {
+            last_expect_ms = millis();
+            ui_set_host_expected(ble_is_bonded() && cloud_has_usable_token());
+        }
     }
 
     // The mood group also moves without a payload: the 15-min window decays

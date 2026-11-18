@@ -27,6 +27,9 @@ bool cloud_take_update(UsageData* out, int prefer);
 
 // The numbers on screen come from the device's own reads right now.
 bool cloud_live(void);
+// A saved token can still be used (or its expiry can't be checked yet: the
+// clock isn't set before the first WiFi join).
+bool cloud_has_usable_token(void);
 // Local wall-clock seconds of the last good read (0 = none).
 long cloud_last_read_local(void);
 

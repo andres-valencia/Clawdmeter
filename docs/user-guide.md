@@ -272,7 +272,11 @@ status line turns red and alternates between `Offline` and
 ago, with the clock off). The numbers come back live when the app reconnects.
 A board that has had no data since it started, or whose pairing was just
 cleared, shows the pairing hint instead; so do boards without a PWR button,
-which re-pair by a touch hold on that hint.
+which re-pair by a touch hold on that hint. In this fork, a paired AMOLED-2.16
+that still has a usable token shows its meters waiting ("Waiting") after it
+starts, reads over WiFi right away, and asks to pair only when it isn't paired
+or every token has expired; either way it keeps advertising so the computer
+reconnects on its own.
 
 **Reading usage on its own (this fork, AMOLED-2.16).** Put your WiFi network
 in a file named `device-wifi` next to the app's config (the network name on

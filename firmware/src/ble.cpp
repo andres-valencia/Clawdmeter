@@ -593,6 +593,10 @@ const char* ble_get_mac_address(void) {
     return mac_str;
 }
 
+bool ble_is_bonded(void) {
+    return NimBLEDevice::getNumBonds() > 0;
+}
+
 void ble_clear_bonds(void) {
     // Delete bonds one at a time (always index 0: each delete shifts the list)
     // and report failures: deleteAllBonds() bails silently on the first error,

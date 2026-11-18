@@ -8,6 +8,7 @@ void cloud_on_auth(const char* json) { (void)json; }
 void cloud_tick(bool ble_connected, int prefer) { (void)ble_connected; (void)prefer; }
 bool cloud_take_update(UsageData* out, int prefer) { (void)out; (void)prefer; return false; }
 bool cloud_live(void) { return false; }
+bool cloud_has_usable_token(void) { return false; }
 long cloud_last_read_local(void) { return 0; }
 void cloud_print_status(void) {}
 void cloud_poll_now(void) {}
@@ -184,6 +185,11 @@ static long utc_now(void) {
 void cloud_init(void) {
     cloud_sched_clear(&sched);
     memset(accts, 0, sizeof(accts));
+    // At boot the computer hasn't connected yet: read right away rather than
+    // after the grace period, so the screen has numbers in seconds. If the
+    // app connects first, WiFi stays off.
+    last_ble = false;
+    ble_down_ms = millis() - CLOUD_GRACE_MS;
     Preferences p;
     p.begin(NVS_NS, true);
     count = p.getUChar("n", 0);
@@ -390,6 +396,13 @@ bool cloud_live(void) {
     if (!now) return false;
     for (int i = 0; i < CLOUD_ACCTS; i++)
         if (reading_live(i, now)) return true;
+    return false;
+}
+
+bool cloud_has_usable_token(void) {
+    const long now = utc_now();
+    for (int i = 0; i < CLOUD_ACCTS; i++)
+        if (accts[i].token[0] && cloud_sched_usable(&sched, i, now)) return true;
     return false;
 }
 

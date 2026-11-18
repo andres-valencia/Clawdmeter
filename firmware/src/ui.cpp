@@ -134,6 +134,7 @@ static lv_image_dsc_t logo_dsc;
 static bool     s_ble_connected = false;   // cached BLE connection state
 static bool     s_cloud_live = false;      // the device reads usage itself over WiFi (cloud.h)
 static long     s_cloud_read = 0;          // local wall-clock seconds of its last read
+static bool     s_host_expected = false;   // paired, with a usable token (ui_set_host_expected)
 static uint32_t connected_at_ms = 0;       // when we last entered CONNECTED ("Connected" dwell)
 
 // Animation state
@@ -1124,12 +1125,16 @@ static void update_view_state(void) {
     if (!s_ble_connected) {
         // No host. A board that already has numbers keeps them up, dimmed,
         // while the computer is away, and the status line says Offline and
-        // when they were last updated (ui_tick_anim); the pairing hint is
-        // for a board with nothing to show. Boards without a
+        // when they were last updated (ui_tick_anim). With nothing to show
+        // yet, a paired board with a usable token waits (dimmed, "Waiting")
+        // for the computer or its own first read; the pairing hint is for a
+        // board that isn't paired or has no usable token. Boards without a
         // PWR button re-pair by a touch hold on the hint itself, so they
         // always show it; a cleared pairing brings it back (ui_set_pair_hint).
+        const bool pwr = board_caps().has_pwr_button;
         v = s_cloud_live && have_last_data ? 2
-          : (data_received && have_last_data && board_caps().has_pwr_button) ? 1 : 0;
+          : (data_received && have_last_data && pwr) ? 1
+          : (s_host_expected && pwr && pair_hint != PAIR_HINT_CLEARED) ? 1 : 0;
     } else if (data_received && data_ok && (lv_tick_get() - last_data_ms) < DATA_FRESH_MS) {
         v = 2;  // live usage
     } else {
@@ -1221,7 +1226,7 @@ void ui_tick_anim(void) {
         return;
     }
 
-    const bool offline = !s_ble_connected && view_state == 1;
+    const bool offline = !s_ble_connected && view_state == 1 && have_last_data;
     if (offline != status_offline) {
         status_offline = offline;
         lv_obj_set_style_text_color(lbl_anim, theme_color(offline ? TH_RED : TH_ACCENT), 0);
@@ -1305,6 +1310,12 @@ void ui_tick_anim(void) {
 
 static void apply_battery_visibility(void) {
     if (battery_img) lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ui_set_host_expected(bool expected) {
+    if (expected == s_host_expected) return;
+    s_host_expected = expected;
+    update_view_state();
 }
 
 void ui_set_cloud(bool live, long last_read_local) {
